@@ -65,16 +65,10 @@ def extract_toc_entries(doc, start_idx):
     return toc_entries
 
 def get_list_marker_info(paragraph, doc):
-    """
-    Определяет тип маркера списка.
-    Возвращает (is_list, marker_type, is_valid)
-    is_valid = False только для круглых маркеров (•)
-    """
     text = paragraph.text.strip()
     if not text:
         return False, "", True
     
-    # Проверяем XML numPr (нумерованные списки Word)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -101,45 +95,30 @@ def get_list_marker_info(paragraph, doc):
                                 if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
                                     for lvl in abstractNum.findall(qn('w:lvl')):
                                         numFmt = lvl.find(qn('w:numFmt'))
-                                        lvlText = lvl.find(qn('w:lvlText'))
-                                        
                                         if numFmt is not None:
                                             fmt = numFmt.get(qn('w:val'))
                                             if fmt == 'bullet':
-                                                # Проверяем текст маркера
-                                                if lvlText is not None:
-                                                    txt_val = lvlText.get(qn('w:val'))
-                                                    if txt_val:
-                                                        clean = re.sub(r'%\d+', '', txt_val).strip()
-                                                        if clean in ['–', '—', '-']:
-                                                            return True, "тире", True
                                                 return True, "круглый маркер (•)", False
                                             elif fmt == 'decimal':
                                                 return True, "нумерованный (цифры)", True
                                             elif fmt in ['lowerLetter', 'upperLetter']:
                                                 return True, "буквенный", True
-                                            elif fmt == 'none':
-                                                return True, "без маркера", False
                                             else:
                                                 return True, f"формат '{fmt}'", True
     except:
         pass
     
-    # Проверяем текстовые маркеры
     if re.match(r'^\d+\)', text):
-        return True, "нумерованный 1)", True
+        return True, "нумерованный", True
     if re.match(r'^[а-яё]\)', text):
-        return True, "буквенный а)", True
+        return True, "буквенный", True
     if re.match(r'^[a-z]\)', text):
-        return True, "буквенный a)", True
+        return True, "буквенный", True
     if re.match(r'^[\-–—]', text):
         return True, "тире", True
     
-    # Спецсимволы-маркеры (круглые - НЕДОПУСТИМЫ)
-    if text and ord(text[0]) in [8226, 8227]:  # • ‣
-        return True, f"круглый маркер (U+{ord(text[0]):04X})", False
-    if text and ord(text[0]) in [9679, 9702]:  # ● ◦
-        return True, f"круглый маркер (U+{ord(text[0]):04X})", False
+    if text and ord(text[0]) in [8226, 8227, 9679, 9702]:
+        return True, "круглый маркер (•)", False
     
     return False, "", True
 
@@ -199,12 +178,47 @@ def get_effective_left_indent(paragraph):
     return 0
 
 def is_table_continuation(text):
-    """Проверяет, является ли строка продолжением/окончанием таблицы"""
     return bool(re.match(r'^(?:Продолжение|Окончание)\s+таблицы?\s*\d', text))
+
+def is_real_table(table, doc):
+    """
+    Проверяет, является ли таблица "реальной" (с данными), а не служебной.
+    Служебные таблицы обычно пустые или с одной ячейкой для форматирования.
+    """
+    # Если таблица пустая — не реальная
+    if len(table.rows) == 0:
+        return False
+    
+    # Собираем весь текст из таблицы
+    total_text = ""
+    for row in table.rows:
+        for cell in row.cells:
+            for para in cell.paragraphs:
+                total_text += para.text
+    
+    total_text = total_text.strip()
+    
+    # Если в таблице нет текста — служебная
+    if not total_text:
+        return False
+    
+    # Если таблица состоит из одной ячейки с коротким текстом — возможно служебная
+    if len(table.rows) == 1 and len(table.columns) == 1:
+        if len(total_text) < 20:
+            return False
+    
+    # Если таблица содержит текст вроде "Продолжение таблицы" в ячейках — это часть другой таблицы
+    if re.search(r'Продолжение\s+таблицы', total_text):
+        return False
+    if re.search(r'Окончание\s+таблицы', total_text):
+        return False
+    
+    return True
 
 def check_word_document(file):
     doc = docx.Document(file)
-    issues = []
+    auto_issues = []      # Автоматические ошибки
+    manual_checks = []    # Для ручной проверки
 
     # ---------- 1. ПОЛЯ СТРАНИЦ ----------
     margins_ok = True
@@ -216,7 +230,7 @@ def check_word_document(file):
             margins_ok = False
             break
     if not margins_ok:
-        issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
+        auto_issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
 
     # ---------- 2. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
     start_idx = None
@@ -238,7 +252,7 @@ def check_word_document(file):
             break
     
     if start_idx is None:
-        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
+        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."], []
 
     toc_entries = extract_toc_entries(doc, start_idx)
 
@@ -272,7 +286,6 @@ def check_word_document(file):
             prev_para_empty = True
             continue
         
-        # Пропускаем содержание
         if has_page_number(text):
             prev_para_empty = False
             continue
@@ -281,20 +294,19 @@ def check_word_document(file):
             prev_para_empty = False
             continue
         
-        # Проверяем списки на недопустимые маркеры
+        # Проверяем списки
         is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
         if is_list:
             if not marker_valid:
-                issues.append(f"«{text[:50]}» – замените круглый маркер (•) на тире, букву или цифру")
-            # Списки не проверяем на отступы как обычный текст
+                auto_issues.append(f"«{text[:50]}» – замените круглый маркер (•) на тире, букву или цифру")
             prev_para_empty = False
             continue
         
-        # Продолжение/окончание таблицы — без отступа
+        # Продолжение/окончание таблицы
         if is_table_continuation(text):
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
-                issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
+                auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
             prev_para_empty = False
             continue
 
@@ -325,26 +337,26 @@ def check_word_document(file):
                     if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
                         page_break = True
                 if not page_break:
-                    issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
+                    auto_issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
             
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
-                issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
+                auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
             
             if not is_paragraph_bold(p):
-                issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
+                auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
             
             if re.match(r'^\d+\.', text) and not is_all_caps(text):
-                issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
+                auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
             
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
+                auto_issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
             
             if text.endswith("."):
-                issues.append(f"«{text[:50]}» – удалите точку в конце")
+                auto_issues.append(f"«{text[:50]}» – удалите точку в конце")
             
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
+                auto_issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
         
         # --- Подраздел ---
         elif is_subsection:
@@ -352,42 +364,40 @@ def check_word_document(file):
             
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
-                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+                auto_issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             
             if not is_paragraph_bold(p):
-                issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
+                auto_issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
             
             if text.endswith("."):
-                issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
+                auto_issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
             
             if prev_para_empty:
-                issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
+                auto_issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
         
         # --- Рисунок ---
         elif is_figure:
             figure_counter += 1
-            # Извлекаем точный номер рисунка
             fig_match = re.match(r'^(Рисунок\s+\d+(?:\.\d+)?)', text)
             fig_number = fig_match.group(1) if fig_match else f"Рисунок {figure_counter}"
             
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"{fig_number} – выровняйте подпись по центру")
+                auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
             
-            # Проверяем точку в конце (только если нет скобок с ссылкой)
             if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
-                issues.append(f"{fig_number} – удалите точку в конце")
+                auto_issues.append(f"{fig_number} – удалите точку в конце")
             
-            # Название с большой буквы
             m = re.match(r'^Рисунок\s+\d+(?:\.\d+)?\s*[–\-]\s*(.+)$', text)
             if m:
                 title = m.group(1).strip()
                 if title and title[0].islower():
-                    issues.append(f"{fig_number} – название должно начинаться с большой буквы")
+                    auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
             
+            # Пустые строки — для ручной проверки
             if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
-                issues.append(f"{fig_number} – добавьте пустую строку перед рисунком")
+                manual_checks.append(f"{fig_number} – проверьте наличие пустой строки перед рисунком")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                issues.append(f"{fig_number} – добавьте пустую строку после рисунка")
+                manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
         
         # --- Подпись таблицы ---
         elif is_table_caption:
@@ -397,9 +407,9 @@ def check_word_document(file):
         else:
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
-                issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+                auto_issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             if pf.space_before and pf.space_before.pt > 0.5:
-                issues.append(f"«{text[:50]}» – интервал перед абзацем должен быть 0 пт")
+                auto_issues.append(f"«{text[:50]}» – интервал перед абзацем должен быть 0 пт")
         
         prev_para_empty = False
 
@@ -418,12 +428,15 @@ def check_word_document(file):
         except:
             pass
 
+    # Собираем только реальные таблицы
     main_tables = []
     for table in doc.tables:
         try:
             tbl_pos = list(doc.element.body).index(table._element)
             if start_body_pos < tbl_pos < end_body_pos:
-                main_tables.append((tbl_pos, table))
+                # Проверяем, что таблица реальная (не служебная)
+                if is_real_table(table, doc):
+                    main_tables.append((tbl_pos, table))
         except:
             pass
 
@@ -447,29 +460,28 @@ def check_word_document(file):
                     caption_idx = i
                     break
             
-            # Извлекаем номер таблицы (может быть 1.1, 2.3 и т.д.)
             tbl_num_match = re.match(r'Таблица\s+([\d.]+)', caption)
             tbl_num = tbl_num_match.group(1) if tbl_num_match else str(t_idx)
             
-            # Проверяем тире
+            # Тире в подписи
             if '—' not in caption and '–' not in caption:
                 if '--' in caption or ' - ' in caption:
-                    issues.append(f"Таблица {tbl_num} – замените дефис на тире (—) в подписи")
+                    auto_issues.append(f"Таблица {tbl_num} – замените дефис на тире (—) в подписи")
             
-            # Проверяем формат
+            # Формат подписи
             if not re.match(r'Таблица\s+[\d.]+\s+[–—]\s+', caption):
-                issues.append(f"Таблица {tbl_num} – должно быть «Таблица {tbl_num} — Название»")
+                auto_issues.append(f"Таблица {tbl_num} – должно быть «Таблица {tbl_num} — Название»")
             
             # Без точки
             if caption.rstrip().endswith("."):
-                issues.append(f"Таблица {tbl_num} – удалите точку в конце названия")
+                auto_issues.append(f"Таблица {tbl_num} – удалите точку в конце названия")
             
-            # Пустая строка перед подписью
+            # Пустая строка перед подписью — ручная проверка
             if caption_idx is not None and caption_idx > start_idx:
                 if not is_empty_paragraph(doc.paragraphs[caption_idx - 1]):
-                    issues.append(f"Таблица {tbl_num} – добавьте пустую строку перед подписью таблицы")
+                    manual_checks.append(f"Таблица {tbl_num} – проверьте наличие пустой строки перед подписью таблицы")
             
-            # Пустая строка после таблицы
+            # Пустая строка после таблицы — ручная проверка
             next_para = None
             for i in range(tbl_pos + 1, end_body_pos):
                 elem = doc.element.body[i]
@@ -480,9 +492,9 @@ def check_word_document(file):
                             break
                     break
             if next_para and not is_empty_paragraph(next_para):
-                issues.append(f"Таблица {tbl_num} – добавьте пустую строку после таблицы")
+                manual_checks.append(f"Таблица {tbl_num} – проверьте наличие пустой строки после таблицы")
         else:
-            issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
+            auto_issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
 
         # Полужирный внутри таблицы
         bold_in_table = False
@@ -500,11 +512,10 @@ def check_word_document(file):
             if bold_in_table:
                 break
         if bold_in_table:
-            # Используем tbl_num если есть, иначе t_idx
-            tbl_num = tbl_num if caption_para else str(t_idx)
-            issues.append(f"Таблица {tbl_num} – уберите полужирное начертание внутри таблицы")
+            tbl_num = tbl_num_match.group(1) if caption_para and tbl_num_match else str(t_idx)
+            auto_issues.append(f"Таблица {tbl_num} – уберите полужирное начертание внутри таблицы")
 
-        # Проверка на перенос
+        # Перенос таблицы — ручная проверка
         rows = len(table.rows)
         if rows > 2:
             tbl_num = tbl_num_match.group(1) if caption_para and tbl_num_match else str(t_idx)
@@ -521,7 +532,7 @@ def check_word_document(file):
                     markers.append((i, txt[:100]))
             
             if not markers:
-                issues.append(f"Таблица {tbl_num} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе")
+                manual_checks.append(f"Таблица {tbl_num} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
 
     # ---------- 6. СПИСОК ИСТОЧНИКОВ ----------
     if lit_start is not None:
@@ -551,17 +562,28 @@ def check_word_document(file):
                 sources_with_issues += 1
         
         if sources_with_issues > 0:
-            issues.append(
+            auto_issues.append(
                 "Список источников – проверьте оформление: "
                 "отступ слева 0 см, отступ первой строки 1,0 см, "
                 "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
             )
 
     # ---------- ИТОГ ----------
-    issues = list(dict.fromkeys(issues))
-    if not issues:
+    auto_issues = list(dict.fromkeys(auto_issues))
+    manual_checks = list(dict.fromkeys(manual_checks))
+    
+    result = []
+    if not auto_issues and not manual_checks:
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
-    return issues
+    
+    if auto_issues:
+        result.extend(auto_issues)
+    
+    if manual_checks:
+        result.append("\n📋 Для ручной проверки проверяющего:")
+        result.extend(manual_checks)
+    
+    return result
 
 # Интерфейс
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
@@ -574,4 +596,7 @@ if uploaded_file is not None:
         results = check_word_document(uploaded_file)
     st.subheader("Результаты проверки:")
     for r in results:
-        st.write(f"• {r}")
+        if r.startswith("📋"):
+            st.markdown(f"**{r}**")
+        else:
+            st.write(f"• {r}")
