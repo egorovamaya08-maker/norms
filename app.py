@@ -8,7 +8,6 @@ import re
 def mm_to_emu(mm):
     return Mm(mm).emu
 
-```python
 def check_word_document(file):
     import docx
     import re
