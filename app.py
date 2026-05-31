@@ -69,10 +69,8 @@ def is_section_header(text):
 
 def get_list_marker_info(paragraph, doc):
     """
-    Определяет тип маркера для элемента списка.
+    Определяет тип маркера для элемента списка Word.
     Возвращает (marker_type, is_valid)
-    marker_type: "тире", "круглый маркер", "нумерованный", "буквенный", "не определен"
-    is_valid: True если маркер допустимый (тире), False если недопустимый (круглый)
     """
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
@@ -80,65 +78,117 @@ def get_list_marker_info(paragraph, doc):
             numPr = pPr.find(qn('w:numPr'))
             if numPr is not None:
                 numId_elem = numPr.find(qn('w:numId'))
+                ilvl_elem = numPr.find(qn('w:ilvl'))
+                
                 if numId_elem is not None:
                     numId = numId_elem.get(qn('w:val'))
+                    ilvl = ilvl_elem.get(qn('w:val')) if ilvl_elem is not None else '0'
                     
-                    # Ищем определение списка в document.xml
-                    # Ищем numId в <w:num> элементах
+                    # Получаем numbering part
                     numbering_part = doc.part.numbering_part
-                    if numbering_part:
-                        numbering_xml = numbering_part._element
-                        
-                        # Ищем num с этим numId
+                    if numbering_part is None:
+                        return "список Word (не удалось прочитать)", True
+                    
+                    numbering_xml = numbering_part._element
+                    
+                    # Ищем num с этим numId
+                    abstractNumId = None
+                    for num in numbering_xml.findall(qn('w:num')):
+                        if num.get(qn('w:numId')) == numId:
+                            aid_elem = num.find(qn('w:abstractNumId'))
+                            if aid_elem is not None:
+                                abstractNumId = aid_elem.get(qn('w:val'))
+                            break
+                    
+                    # Если не нашли num, пробуем искать через numIdMacAtCleanup
+                    if abstractNumId is None:
+                        for num in numbering_xml.findall(qn('w:num')):
+                            mac_elem = num.find(qn('w:numIdMacAtCleanup'))
+                            if mac_elem is not None and mac_elem.get(qn('w:val')) == numId:
+                                aid_elem = num.find(qn('w:abstractNumId'))
+                                if aid_elem is not None:
+                                    abstractNumId = aid_elem.get(qn('w:val'))
+                                break
+                    
+                    if abstractNumId is None:
+                        # Последняя попытка - прямой перебор всех abstractNum
                         for num in numbering_xml.findall(qn('w:num')):
                             if num.get(qn('w:numId')) == numId:
-                                # Ищем abstractNumId
-                                abstractNumId_elem = num.find(qn('w:abstractNumId'))
-                                if abstractNumId_elem is not None:
-                                    abstractNumId = abstractNumId_elem.get(qn('w:val'))
-                                    
-                                    # Ищем abstractNum с этим abstractNumId
-                                    for abstractNum in numbering_xml.findall(qn('w:abstractNum')):
-                                        if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
-                                            # Ищем lvl (уровень 0)
-                                            for lvl in abstractNum.findall(qn('w:lvl')):
-                                                if lvl.get(qn('w:ilvl')) == '0':
-                                                    # Ищем numFmt (формат номера)
-                                                    numFmt = lvl.find(qn('w:numFmt'))
-                                                    if numFmt is not None:
-                                                        fmt = numFmt.get(qn('w:val'))
-                                                        
-                                                        if fmt == 'bullet':
-                                                            # Круглый маркер - недопустимо
-                                                            return "круглый маркер (•)", False
-                                                        elif fmt == 'decimal':
-                                                            return "нумерованный", True
-                                                        elif fmt == 'lowerLetter':
-                                                            return "буквенный", True
-                                                        elif fmt == 'upperLetter':
-                                                            return "буквенный", True
-                                                        else:
-                                                            return f"другой формат ({fmt})", True
-                                                    
-                                                    # Ищем lvlText (текст маркера)
-                                                    lvlText = lvl.find(qn('w:lvlText'))
-                                                    if lvlText is not None:
-                                                        text = lvlText.get(qn('w:val'))
-                                                        if text:
-                                                            # Проверяем, содержит ли текст символы маркеров
-                                                            if '•' in text or '\u2022' in text:
-                                                                return "круглый маркер (•)", False
-                                                            if text in ['–', '—', '-']:
-                                                                return "тире", True
-                                                    
-                                                    break
-                                        
+                                for child in num:
+                                    if child.tag == qn('w:abstractNumId'):
+                                        abstractNumId = child.get(qn('w:val'))
                                         break
-                                break
+                                if abstractNumId:
+                                    break
+                    
+                    if abstractNumId is None:
+                        return "список Word (не найден abstractNumId)", True
+                    
+                    # Ищем abstractNum
+                    for abstractNum in numbering_xml.findall(qn('w:abstractNum')):
+                        if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
+                            # Ищем lvl с нужным ilvl
+                            for lvl in abstractNum.findall(qn('w:lvl')):
+                                lvl_ilvl = lvl.get(qn('w:ilvl'))
+                                if lvl_ilvl == ilvl:
+                                    # Способ 1: проверяем lvlText (надёжнее)
+                                    lvlText = lvl.find(qn('w:lvlText'))
+                                    numFmt = lvl.find(qn('w:numFmt'))
+                                    
+                                    if lvlText is not None:
+                                        text_val = lvlText.get(qn('w:val'))
+                                        if text_val:
+                                            # Убираем %1, %2 и т.д.
+                                            clean_text = re.sub(r'%\d+', '', text_val).strip()
+                                            
+                                            if clean_text in ['–', '—', '-', '\u2013', '\u2014']:
+                                                return "тире", True
+                                            elif clean_text in ['•', '●', '◦', '\u2022', '\u25CF', '\u25E6']:
+                                                return "круглый маркер (•)", False
+                                            elif clean_text in ['▪', '▫', '\u25AA', '\u25AB']:
+                                                return "квадратный маркер", False
+                                            elif clean_text in ['►', '▸', '\u25BA', '\u25B8']:
+                                                return "маркер-треугольник", False
+                                            elif clean_text and len(clean_text) > 0:
+                                                code = ord(clean_text[0])
+                                                if code in [8226, 8227]:  # U+2022, U+2023
+                                                    return "круглый маркер (•)", False
+                                                elif code in range(0x25A0, 0x25FF):
+                                                    return f"геометрический маркер (U+{code:04X})", False
+                                                elif code in [45, 8211, 8212]:  # - – —
+                                                    return "тире", True
+                                    
+                                    # Способ 2: проверяем numFmt
+                                    if numFmt is not None:
+                                        fmt = numFmt.get(qn('w:val'))
+                                        
+                                        if fmt == 'bullet':
+                                            return "круглый маркер (•)", False
+                                        elif fmt == 'decimal':
+                                            return "нумерованный (цифры)", True
+                                        elif fmt == 'lowerLetter':
+                                            return "буквенный (а, б)", True
+                                        elif fmt == 'upperLetter':
+                                            return "буквенный (А, Б)", True
+                                        elif fmt == 'lowerRoman':
+                                            return "римские цифры (i, ii)", True
+                                        elif fmt == 'upperRoman':
+                                            return "римские цифры (I, II)", True
+                                        elif fmt == 'none':
+                                            return "без маркера", False
+                                        else:
+                                            return f"формат '{fmt}'", True
+                                    
+                                    return "список (тип не определён)", True
+                            
+                            break
+            
+            return "список (не найден уровень)", True
+                        
     except Exception as e:
-        pass
+        return f"ошибка чтения", True
     
-    return "не определен (проверьте вручную)", True
+    return "не список", True
 
 def is_list_item(text, paragraph, doc):
     """Проверяет, является ли параграф элементом списка"""
