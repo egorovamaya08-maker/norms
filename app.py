@@ -1,4 +1,14 @@
-def get_table_depth(table, doc):
+import streamlit as st
+import docx
+from docx.oxml.ns import qn
+import re
+
+def has_page_number(text):
+    if re.search(r'[\t\s\.]{2,}\d+$', text):
+        return True
+    return False
+
+def get_table_depth(table):
     """
     Определяет, не является ли таблица вложенной в другую таблицу.
     Возвращает глубину вложенности (0 = верхний уровень)
@@ -14,16 +24,29 @@ def get_table_depth(table, doc):
     
     return depth
 
+def find_table_continuation_markers(doc, start_pos, end_pos, table_num):
+    """Ищет Продолжение/Окончание таблицы"""
+    markers_found = []
+    for i in range(start_pos, min(end_pos + 1, len(doc.paragraphs))):
+        txt = doc.paragraphs[i].text.strip()
+        if txt:
+            if re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + str(table_num), txt):
+                markers_found.append((i, txt[:100]))
+    return markers_found
+
+def is_all_caps(text):
+    clean_text = re.sub(r'[\d\s\.,;:!?\-–—()«»""''\-\+–—]', '', text)
+    if not clean_text:
+        return False
+    return clean_text == clean_text.upper()
+
 def test_document(file):
     doc = docx.Document(file)
     
-    st.header("🔍 Анализ документа")
+    st.header("📊 Проверка таблиц")
+    st.write("Проверяем: подписи, тире, точки, переносы, вложенные таблицы")
     
-    # ============================================
-    # ТЕСТ 1: Заголовки разделов
-    # ============================================
-    st.subheader("📋 Тест 1: Заголовки разделов")
-    
+    # Ищем начало основного текста
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
     start_idx = None
     
@@ -33,149 +56,25 @@ def test_document(file):
             continue
         if txt.upper() in level1_keywords or (re.match(r'^\d+\.\s+[А-ЯЁ]', txt) and is_all_caps(txt)):
             start_idx = i
-            st.write(f"✅ Строка {i}: Начало текста: '{txt[:100]}'")
+            st.write(f"✅ Начало текста: строка {i} ('{txt[:80]}')")
             break
     
     if start_idx is None:
         st.warning("⚠️ Не найдено начало основного текста")
         return
     
-    toc_entries = extract_toc_entries(doc, start_idx)
-    
-    st.write("**Заголовки в тексте:**")
-    section_headers = []
-    issues_found = 0
-    
+    # Ищем список литературы
+    lit_start = None
     for i in range(start_idx, len(doc.paragraphs)):
-        p = doc.paragraphs[i]
-        txt = p.text.strip()
-        
-        if not txt or has_page_number(txt):
-            continue
-        
-        # Пропускаем списки
-        is_list, _, _ = is_list_item(txt, p, doc)
-        if is_list:
-            continue
-        
-        first_line = get_effective_first_line_indent(p)
-        normalized = normalize_title(txt)
-        in_toc = any(normalize_title(e) == normalized for e in toc_entries)
-        
-        is_header = False
-        header_type = ""
-        
-        if is_section_header(txt):
-            is_header = True
-            header_type = "раздел"
-        elif in_toc and len(txt) > 20:
-            is_header = True
-            header_type = "из содержания"
-        elif is_all_caps(txt) and len(txt) > 25:
-            is_header = True
-            header_type = "капсом"
-        
-        if is_header and len(section_headers) < 30:
-            st.write(f"**Строка {i}** ({header_type}): '{txt[:80]}'")
-            st.write(f"  Отступ: {first_line:.3f} см {'✅' if abs(first_line) < 0.1 else '❌ должен быть 0 см'}")
-            if abs(first_line) > 0.1:
-                issues_found += 1
-            section_headers.append((i, txt[:80], first_line))
-            st.write("---")
-    
-    if issues_found == 0:
-        st.success("✅ Все заголовки без отступа")
-    else:
-        st.error(f"❌ {issues_found} заголовков с ошибочным отступом")
-    
-    # ============================================
-    # ТЕСТ 2: Списки
-    # ============================================
-    st.subheader("📝 Тест 2: Элементы списков")
-    st.write("**Требования:**")
-    st.write("• Маркер должен быть ТИРЕ (–), а не круглый (•)")
-    st.write("• Отступ первой строки должен быть 1.0 см")
-    
-    list_items_found = 0
-    list_items_correct = 0
-    list_items_wrong = 0
-    wrong_marker_items = []
-    
-    for i in range(start_idx, len(doc.paragraphs)):
-        p = doc.paragraphs[i]
-        txt = p.text.strip()
-        
-        if not txt or has_page_number(txt):
-            continue
-        
-        is_list, marker_type, marker_valid = is_list_item(txt, p, doc)
-        
-        if is_list:
-            first_line = get_effective_first_line_indent(p)
-            xml_info = get_paragraph_xml_info(p)
-            
-            list_items_found += 1
-            
-            indent_ok = abs(first_line - 1.0) < 0.15
-            
-            if list_items_found <= 25:
-                st.write(f"**Элемент {list_items_found}** строка {i}:")
-                st.write(f"  '{txt[:70]}...'")
-                st.write(f"  Тип маркера: {marker_type} {'✅' if marker_valid else '❌ НЕДОПУСТИМ (нужно тире)'}")
-                st.write(f"  Отступ: {first_line:.3f} см {'✅' if indent_ok else '❌ нужен 1.0 см'}")
-                st.write(f"  XML: {xml_info}")
-                
-                if not marker_valid or not indent_ok:
-                    if not marker_valid:
-                        st.write(f"  🔴 Ошибка: замените круглый маркер на тире (–)")
-                    if not indent_ok:
-                        st.write(f"  🔴 Ошибка: установите отступ 1.0 см (сейчас {first_line:.1f} см)")
-                else:
-                    st.write(f"  🟢 Всё правильно")
-                
-                st.write("---")
-            
-            if marker_valid and indent_ok:
-                list_items_correct += 1
-            else:
-                list_items_wrong += 1
-                if not marker_valid:
-                    wrong_marker_items.append((i, txt[:50], marker_type))
-        
-        if list_items_found >= 100:
+        if doc.paragraphs[i].text.strip().upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
+            lit_start = i
             break
-    
-    if list_items_found == 0:
-        st.write("ℹ️ Списки не найдены")
-    else:
-        st.write(f"📊 Всего: {list_items_found}")
-        st.write(f"  ✅ Правильно: {list_items_correct}")
-        st.write(f"  ❌ С ошибками: {list_items_wrong}")
-        
-        if wrong_marker_items:
-            st.write("---")
-            st.write(f"**❌ Элементы с недопустимыми круглыми маркерами (нужно заменить на тире):**")
-            for idx, text, marker in wrong_marker_items:
-                st.write(f"  • Строка {idx}: [{marker}] '{text}...'")
-    
-    # ============================================
-    # ТЕСТ 3: Таблицы
-    # ============================================
-    st.subheader("📊 Тест 3: Таблицы")
-    st.write("Проверка необходимости «Продолжение таблицы» / «Окончание таблицы»")
-    st.write("⚠️ Автоматически невозможно определить границы страниц. Проверяем все таблицы.")
     
     try:
         start_element = doc.paragraphs[start_idx]._element
         start_body_pos = list(doc.element.body).index(start_element)
     except:
         start_body_pos = 0
-    
-    lit_start = None
-    for i in range(start_idx, len(doc.paragraphs)):
-        if doc.paragraphs[i].text.strip().upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
-            lit_start = i
-            break
     
     end_body_pos = len(doc.element.body)
     if lit_start:
@@ -185,40 +84,63 @@ def test_document(file):
         except:
             pass
     
-    # Собираем ТОЛЬКО таблицы верхнего уровня (не вложенные)
-    main_tables = []
-    skipped_tables = 0
+    # Собираем ВСЕ таблицы и анализируем их
+    st.write("---")
+    st.write("**Анализ всех таблиц в документе:**")
     
+    all_tables = []
     for table in doc.tables:
-        # Проверяем, не вложена ли таблица в другую таблицу
-        depth = get_table_depth(table, doc)
-        
-        if depth > 0:
-            skipped_tables += 1
-            continue
-        
+        depth = get_table_depth(table)
         try:
             tbl_pos = list(doc.element.body).index(table._element)
-            if start_body_pos < tbl_pos < end_body_pos:
-                main_tables.append((tbl_pos, table))
         except:
-            pass
+            tbl_pos = -1
+        
+        all_tables.append({
+            'table': table,
+            'depth': depth,
+            'pos': tbl_pos,
+            'rows': len(table.rows),
+            'cols': len(table.columns)
+        })
     
-    st.write(f"Таблиц в тексте: {len(main_tables)}")
-    if skipped_tables > 0:
-        st.write(f"Пропущено вложенных таблиц: {skipped_tables}")
+    st.write(f"Всего таблиц в документе: {len(all_tables)}")
+    
+    # Показываем все таблицы с их статусом
+    for i, t in enumerate(all_tables, 1):
+        in_main = start_body_pos < t['pos'] < end_body_pos
+        
+        status = ""
+        if t['depth'] > 0:
+            status = f"❌ ВЛОЖЕННАЯ (глубина {t['depth']}) - ПРОПУСКАЕМ"
+        elif not in_main:
+            status = "❌ Вне основного текста - ПРОПУСКАЕМ"
+        else:
+            status = "✅ Таблица основного текста - ПРОВЕРЯЕМ"
+        
+        st.write(f"**Таблица {i}:** позиция {t['pos']}, {t['rows']}×{t['cols']}, {status}")
+    
+    # Теперь проверяем только таблицы основного текста
+    st.write("---")
+    st.write("**Проверка таблиц основного текста:**")
+    
+    main_tables = [(t['pos'], t['table']) for t in all_tables 
+                   if t['depth'] == 0 and start_body_pos < t['pos'] < end_body_pos]
+    
+    st.write(f"Таблиц для проверки: {len(main_tables)}")
+    
+    if len(main_tables) == 0:
+        st.warning("⚠️ Нет таблиц основного текста для проверки")
+        return
     
     tables_need_check = 0
     
     for t_idx, (tbl_pos, table) in enumerate(main_tables, start=1):
         st.write(f"---")
-        st.write(f"**Таблица {t_idx}** (позиция {tbl_pos})")
+        st.write(f"**Проверяемая таблица {t_idx}** (позиция {tbl_pos})")
+        st.write(f"  Размер: {len(table.rows)} строк × {len(table.columns)} столбцов")
         
-        rows = len(table.rows)
-        cols = len(table.columns)
-        st.write(f"  Размер: {rows} строк × {cols} столбцов")
-        
-        # Подпись
+        # Ищем подпись
         caption = None
         for i in range(tbl_pos - 1, start_body_pos - 1, -1):
             elem = doc.element.body[i]
@@ -232,20 +154,29 @@ def test_document(file):
         
         if caption:
             cap_text = caption.text.strip()
-            st.write(f"  Подпись: '{cap_text[:120]}'")
+            st.write(f"  Подпись: '{cap_text[:150]}'")
             
-            if '—' in cap_text or '–' in cap_text:
-                st.write(f"  ✅ Тире правильное")
-            elif '--' in cap_text or ' - ' in cap_text:
-                st.write(f"  ⚠️ Нужно заменить на тире (—)")
-            
-            if cap_text.rstrip().endswith("."):
-                st.write(f"  ⚠️ Убрать точку в конце")
+            if cap_text.startswith("Таблица"):
+                if '—' in cap_text or '–' in cap_text:
+                    st.write(f"  ✅ Тире правильное")
+                elif '--' in cap_text:
+                    st.write(f"  ⚠️ Используется двойной дефис (--), нужно заменить на тире")
+                elif ' - ' in cap_text:
+                    st.write(f"  ⚠️ Используется дефис, нужно заменить на тире")
+                else:
+                    st.write(f"  ⚠️ Проверьте наличие тире после номера таблицы")
+                
+                if cap_text.rstrip().endswith("."):
+                    st.write(f"  ❌ Точка в конце подписи (удалите)")
+                else:
+                    st.write(f"  ✅ Нет точки в конце")
+            else:
+                st.write(f"  ⚠️ Подпись не начинается с 'Таблица'")
         else:
-            st.write(f"  ⚠️ Подпись не найдена")
+            st.write(f"  ⚠️ Подпись не найдена перед таблицей")
         
-        # Проверка на перенос (для таблиц больше 2 строк)
-        if rows > 2:
+        # Проверка на перенос
+        if len(table.rows) > 2:
             next_table_pos = end_body_pos
             for next_tbl_pos, _ in main_tables[t_idx:]:
                 if next_tbl_pos > tbl_pos:
@@ -256,28 +187,45 @@ def test_document(file):
             
             if not markers:
                 st.write(f"  🔴 **Нет «Продолжение таблицы {t_idx}» / «Окончание таблицы {t_idx}»**")
-                st.write(f"  💡 Проверьте вручную. Если таблица на нескольких страницах, добавьте:")
+                st.write(f"  💡 Если таблица на нескольких страницах, добавьте:")
                 st.write(f"     • «Продолжение таблицы {t_idx}» на следующей странице")
                 st.write(f"     • «Окончание таблицы {t_idx}» на последней странице")
                 tables_need_check += 1
             else:
-                st.write(f"  ✅ Маркеры найдены:")
+                st.write(f"  ✅ Маркеры переноса найдены:")
                 for m_pos, m_text in markers:
                     st.write(f"    • Строка {m_pos}: '{m_text}'")
         else:
-            st.write(f"  ✅ Маленькая таблица, перенос маловероятен")
+            st.write(f"  ✅ Таблица маленькая, перенос маловероятен")
+        
+        # Показываем первые строки
+        st.write(f"  📋 Первые 3 строки:")
+        for r_idx, row in enumerate(table.rows[:3]):
+            cells_text = []
+            for cell in row.cells:
+                cells_text.append(cell.text.strip()[:30])
+            st.write(f"    Строка {r_idx + 1}: {' | '.join(cells_text)}")
     
-    if tables_need_check > 0:
-        st.warning(f"⚠️ {tables_need_check} таблиц требуют ручной проверки")
-    else:
-        st.success("✅ Все таблицы в порядке")
-    
-    # ============================================
-    # ИТОГИ
-    # ============================================
-    st.header("📊 Итоги")
-    st.write(f"• Заголовков: {len(section_headers)} (ошибок отступа: {issues_found})")
-    st.write(f"• Списков: {list_items_found} (правильно: {list_items_correct}, ошибок: {list_items_wrong})")
-    if wrong_marker_items:
-        st.write(f"  • Из них с недопустимым маркером: {len(wrong_marker_items)}")
-    st.write(f"• Таблиц: {len(main_tables)} (нужна проверка переноса: {tables_need_check})")
+    st.write("---")
+    st.write("**Итог:**")
+    st.write(f"• Всего таблиц в документе: {len(all_tables)}")
+    st.write(f"• Вложенных (пропущено): {sum(1 for t in all_tables if t['depth'] > 0)}")
+    st.write(f"• Вне основного текста (пропущено): {sum(1 for t in all_tables if t['depth'] == 0 and not (start_body_pos < t['pos'] < end_body_pos))}")
+    st.write(f"• Проверено: {len(main_tables)}")
+    st.write(f"• Требуют проверки на перенос: {tables_need_check}")
+
+
+# Интерфейс
+st.set_page_config(page_title="Тест таблиц", layout="wide")
+st.title("📊 Тест проверки таблиц")
+st.write("Проверяет:")
+st.write("• Не вложена ли таблица в другую таблицу")
+st.write("• Наличие подписи 'Таблица N – Название'")
+st.write("• Правильность тире и отсутствие точки в конце")
+st.write("• Наличие «Продолжение таблицы» / «Окончание таблицы»")
+
+uploaded_file = st.file_uploader("Загрузите .docx", type=["docx"])
+
+if uploaded_file is not None:
+    with st.spinner("Анализ таблиц..."):
+        test_document(uploaded_file)
