@@ -90,25 +90,48 @@ def extract_toc_entries(doc, start_idx):
                 toc_entries.append(clean)
     return toc_entries
 
+def is_dash_char(ch):
+    """Проверяет, является ли символ тире (включая приватные области Unicode)"""
+    code = ord(ch)
+    # Обычные тире
+    if code in [0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015]:
+        return True
+    # Тире в приватной области Unicode (часто используется в Word)
+    if 0xE000 <= code <= 0xF8FF:
+        return True
+    return False
+
+def is_bullet_char(ch):
+    """Проверяет, является ли символ круглым маркером"""
+    code = ord(ch)
+    return code in [0x2022, 0x2023, 0x25E6, 0x25CF, 0x25CB, 0x26AB, 0x2B24]
+
 def get_list_marker_info(paragraph, doc):
     text = paragraph.text.strip()
     if not text:
         return False, "", True
     
-    if re.match(r'^[\-–—]\s', text):
+    first_char = text[0] if text else ""
+    
+    # Проверяем, является ли первый символ тире (включая приватные области)
+    if is_dash_char(first_char):
         return True, "тире", True
     
+    # Нумерованные
     if re.match(r'^\d+\)\s', text):
         return True, "нумерованный", True
     
+    # Буквенные
     if re.match(r'^[а-яё]\)\s', text):
         return True, "буквенный", True
     if re.match(r'^[a-z]\)\s', text):
         return True, "буквенный", True
     
-    if text and ord(text[0]) in [8226, 8227, 9679, 9702]:
+    # Круглые маркеры (НЕдопустимо) — проверяем ПОСЛЕ тире
+    if is_bullet_char(first_char):
         return True, "круглый маркер (•)", False
     
+    # Проверяем XML numPr
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -132,15 +155,18 @@ def get_list_marker_info(paragraph, doc):
                                 if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
                                     for lvl in abstractNum.findall(qn('w:lvl')):
                                         numFmt = lvl.find(qn('w:numFmt'))
+                                        lvlText_elem = lvl.find(qn('w:lvlText'))
+                                        
                                         if numFmt is not None:
                                             fmt = numFmt.get(qn('w:val'))
                                             if fmt == 'bullet':
-                                                lvlText = lvl.find(qn('w:lvlText'))
-                                                if lvlText is not None:
-                                                    txt_val = lvlText.get(qn('w:val'))
+                                                # Проверяем текст маркера
+                                                if lvlText_elem is not None:
+                                                    txt_val = lvlText_elem.get(qn('w:val'))
                                                     if txt_val:
                                                         clean = re.sub(r'%\d+', '', txt_val).strip()
-                                                        if clean in ['–', '—', '-']:
+                                                        # Если в тексте маркера тире — ок
+                                                        if clean and is_dash_char(clean[0]):
                                                             return True, "тире", True
                                                 return True, "круглый маркер (•)", False
                                             elif fmt == 'decimal':
@@ -224,7 +250,6 @@ def find_nearest_caption(doc, tbl_pos, start_body_pos):
     return None, None
 
 def is_formula_or_equation(text):
-    """Определяет, является ли строка формулой"""
     if re.search(r'[=≠≤≥±×÷∫∑∏√∞∂∇∈∉⊂⊃∪∩]', text):
         return True
     if re.search(r'[α-ωΑ-Ω]', text):
@@ -234,47 +259,36 @@ def is_formula_or_equation(text):
     return False
 
 def is_formula_where_line(text):
-    """Проверяет, является ли строка пояснением к формуле (начинается с где/Где)"""
     return bool(re.match(r'^[Гг]де\s*[:\s]?\s*[А-Яа-яA-Za-z\-–—]', text))
 
 def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty):
-    """
-    Проверяет оформление пояснения к формуле.
-    Возвращает список ошибок.
-    """
     errors = []
-    key = "Пояснение к формуле"
     
-    # 1. "где" должно быть с маленькой буквы
+    # Извлекаем начало пояснения для идентификации
+    short_text = text[:60] + "…" if len(text) > 60 else text
+    key = f"Пояснение к формуле «{short_text}»"
+    
     if text.startswith("Где"):
         errors.append(f"{key} – «где» должно быть с маленькой буквы")
     
-    # 2. Не должно быть двоеточия после "где"
     if re.match(r'^[Гг]де\s*:', text):
         errors.append(f"{key} – уберите двоеточие после «где»")
     
-    # 3. Должен быть абзацный отступ 1 см
     first_line = get_effective_first_line_indent(paragraph)
     if abs(first_line - 1.0) > 0.2:
         errors.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
     
-    # 4. Не должно быть пустой строки перед пояснением (должно идти сразу после формулы)
     if prev_para_empty and prev_was_formula:
         errors.append(f"{key} – уберите пустую строку перед пояснением (должно идти сразу после формулы)")
     
-    # 5. Проверка знаков препинания в пояснениях
-    # Убираем "где" и двоеточие если есть
+    # Проверка знаков препинания
     explanation_text = re.sub(r'^[Гг]де\s*:?\s*', '', text).strip()
     
-    # Проверяем, есть ли несколько пояснений (разделённых пробелами/табуляциями)
-    # Пояснения обычно разделены на строки, но в одном параграфе они могут быть разделены табуляцией
     lines = [l.strip() for l in explanation_text.split('\t') if l.strip()]
     if len(lines) > 1:
-        # Многострочное пояснение в одном параграфе
         for i, line in enumerate(lines):
             if i < len(lines) - 1:
                 if not line.endswith(';'):
-                    # Извлекаем обозначение переменной
                     var_match = re.match(r'^([^\s–—]+)\s*[–—]\s*(.+)$', line)
                     var_name = var_match.group(1) if var_match else line[:20]
                     errors.append(f"{key} – после «{var_name}» должна быть точка с запятой (;)")
@@ -284,8 +298,6 @@ def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty
                     var_name = var_match.group(1) if var_match else line[:20]
                     errors.append(f"{key} – после «{var_name}» должна быть точка (.)")
     else:
-        # Одна строка — проверяем, может быть несколько пояснений через пробел
-        # Разбиваем по шаблону "обозначение – описание"
         parts = re.findall(r'([^\s–—]+)\s*[–—]\s*([^;.]+)([;.]?)', explanation_text)
         
         if len(parts) > 1:
@@ -322,7 +334,7 @@ def group_issues(issues_list):
     standalone = []
     
     for issue in auto_issues:
-        match = re.match(r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|(Подраздел\s+«([^»]+)»)|(Пояснение к формуле))\s*[–-]\s*(.+)$', issue)
+        match = re.match(r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|(Подраздел\s+«([^»]+)»)|(Пояснение к формуле «([^»]+)»)|(Список начиная с «([^»]+)»))\s*[–-]\s*(.+)$', issue)
         
         if match:
             key = None
@@ -335,10 +347,12 @@ def group_issues(issues_list):
             elif match.group(5):
                 key = f"Подраздел «{match.group(5)[:50]}»"
             elif match.group(6):
-                key = "Пояснение к формуле"
+                key = f"Пояснение к формуле «{match.group(7)[:60]}»"
+            elif match.group(8):
+                key = f"Список начиная с «{match.group(9)[:50]}»"
             
             if key:
-                message = match.group(7) if match.lastindex >= 7 else match.group(6)
+                message = match.group(10)
                 grouped[key].append(message)
             else:
                 standalone.append(issue)
@@ -352,21 +366,22 @@ def group_issues(issues_list):
     
     for key, messages in grouped.items():
         if len(messages) == 1:
-            if key.startswith("Подраздел «"):
-                result.append(f"{key} – {messages[0]}")
+            prefix = ""
+            if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
+                prefix = ""
             elif key.startswith("Рисунок ") or key.startswith("Таблица "):
-                result.append(f"{key} – {messages[0]}")
-            elif key == "Пояснение к формуле":
-                result.append(f"{key} – {messages[0]}")
+                prefix = ""
             else:
+                prefix = "«"
+                suffix = "»"
                 result.append(f"«{key}» – {messages[0]}")
+                continue
+            result.append(f"{key} – {messages[0]}")
         else:
             combined = "; ".join(messages)
-            if key.startswith("Подраздел «"):
+            if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
                 result.append(f"{key} – {combined}")
             elif key.startswith("Рисунок ") or key.startswith("Таблица "):
-                result.append(f"{key} – {combined}")
-            elif key == "Пояснение к формуле":
                 result.append(f"{key} – {combined}")
             else:
                 result.append(f"«{key}» – {combined}")
@@ -437,13 +452,22 @@ def check_word_document(file):
     prev_para_empty = False
     prev_was_formula = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
-
+    
+    # Для группировки ошибок списков
+    list_errors = []  # (idx, text, error_msg)
+    
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
         
         if not text:
             prev_para_empty = True
+            # Группируем накопившиеся ошибки списков
+            if list_errors:
+                # Берём первый элемент как представитель
+                first_text = list_errors[0][1]
+                auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                list_errors = []
             continue
         if has_page_number(text):
             prev_para_empty = False
@@ -455,9 +479,30 @@ def check_word_document(file):
         is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
         if is_list:
             if not marker_valid:
-                auto_issues.append(f"«{text[:50]}» – замените круглый маркер (•) на тире, букву или цифру")
+                # Проверяем, является ли это продолжением списка с ошибками
+                if list_errors and idx == list_errors[-1][0] + 1:
+                    list_errors.append((idx, text, marker_type))
+                else:
+                    # Если были предыдущие ошибки — группируем
+                    if list_errors:
+                        first_text = list_errors[0][1]
+                        auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                        list_errors = []
+                    list_errors.append((idx, text, marker_type))
+            else:
+                # Если маркер правильный, сбрасываем накопленные ошибки
+                if list_errors:
+                    first_text = list_errors[0][1]
+                    auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                    list_errors = []
             prev_para_empty = False
             continue
+        
+        # Если накопились ошибки списков, но встретился не-список — группируем
+        if list_errors:
+            first_text = list_errors[0][1]
+            auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+            list_errors = []
         
         if is_table_continuation(text):
             first_line = get_effective_first_line_indent(p)
@@ -476,7 +521,6 @@ def check_word_document(file):
             prev_para_empty = False
             continue
         
-        # Проверяем, является ли строка формулой
         if is_formula_or_equation(text):
             prev_was_formula = True
             prev_para_empty = False
@@ -588,6 +632,11 @@ def check_word_document(file):
         
         prev_para_empty = False
         prev_was_formula = False
+    
+    # Обработка оставшихся ошибок списков
+    if list_errors:
+        first_text = list_errors[0][1]
+        auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
 
     # ---------- 5. ТАБЛИЦЫ ----------
     try:
@@ -716,38 +765,4 @@ def check_word_document(file):
                 continue
             
             has_issue = False
-            left_indent = get_effective_left_indent(source)
-            if abs(left_indent) > 0.1:
-                has_issue = True
-            first_line = get_effective_first_line_indent(source)
-            if abs(first_line - 1.0) > 0.1:
-                has_issue = True
-            if has_issue:
-                sources_with_issues += 1
-        
-        if sources_with_issues > 0:
-            auto_issues.append(
-                "Список источников – проверьте оформление: "
-                "отступ слева 0 см, отступ первой строки 1,0 см, "
-                "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
-            )
-
-    # ---------- ГРУППИРУЕМ И ВЫВОДИМ ----------
-    all_issues = auto_issues + manual_checks
-    return group_issues(all_issues)
-
-# Интерфейс
-st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
-st.title("📊 Автоматическая проверка документов Word")
-st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
-uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
-
-if uploaded_file is not None:
-    with st.spinner("Проверяем..."):
-        results = check_word_document(uploaded_file)
-    st.subheader("Результаты проверки:")
-    for r in results:
-        if r.startswith("📋"):
-            st.markdown(f"**{r}**")
-        else:
-            st.write(f"• {r}")
+            left_indent =
