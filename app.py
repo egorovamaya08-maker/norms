@@ -16,30 +16,23 @@ def get_effective_alignment(paragraph):
     return None
 
 def is_paragraph_bold(paragraph):
-    """
-    Проверяет, является ли текст параграфа полужирным.
-    Возвращает True если есть хоть какая-то жирность (полная или частичная),
-    False если жирности нет совсем.
-    """
-    # Способ 1: проверяем runs
+    # Проверяем runs
     runs = [r for r in paragraph.runs if r.text.strip()]
     if runs:
-        # Если хоть один run жирный — считаем что жирность есть
         if any(r.bold for r in runs):
             return True
     
-    # Способ 2: проверяем стиль параграфа
+    # Проверяем стиль
     try:
         if paragraph.style and paragraph.style.font and paragraph.style.font.bold:
             return True
     except:
         pass
     
-    # Способ 3: проверяем XML напрямую
+    # Проверяем XML
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
-            # Проверяем rPr в pPr (стиль параграфа)
             pPr_rPr = pPr.find(qn('w:rPr'))
             if pPr_rPr is not None:
                 bold_elem = pPr_rPr.find(qn('w:b'))
@@ -48,7 +41,6 @@ def is_paragraph_bold(paragraph):
                     if val != 'false' and val != '0':
                         return True
             
-            # Проверяем rPr в каждом run
             for r in paragraph._element.findall(qn('w:r')):
                 rPr = r.find(qn('w:rPr'))
                 if rPr is not None:
@@ -75,7 +67,6 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    """Определяет, является ли строка заголовком раздела первого уровня"""
     if re.match(r'^\d+\.\s+[А-ЯЁ]', text) and is_all_caps(text):
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
@@ -102,10 +93,36 @@ def extract_toc_entries(doc, start_idx):
     return toc_entries
 
 def get_list_marker_info(paragraph, doc):
+    """
+    Определяет тип маркера списка.
+    Возвращает (is_list, marker_type, is_valid)
+    is_valid = False только для круглых маркеров
+    """
     text = paragraph.text.strip()
     if not text:
         return False, "", True
     
+    # Сначала проверяем текстовые маркеры (более надёжно)
+    
+    # Тире (допустимо)
+    if re.match(r'^[\-–—]\s', text):
+        return True, "тире", True
+    
+    # Нумерованные (допустимо)
+    if re.match(r'^\d+\)\s', text):
+        return True, "нумерованный", True
+    
+    # Буквенные (допустимо)
+    if re.match(r'^[а-яё]\)\s', text):
+        return True, "буквенный", True
+    if re.match(r'^[a-z]\)\s', text):
+        return True, "буквенный", True
+    
+    # Круглые маркеры (НЕдопустимо) — проверяем ДО XML
+    if text and ord(text[0]) in [8226, 8227, 9679, 9702]:  # • ‣ ● ◦
+        return True, "круглый маркер (•)", False
+    
+    # Проверяем XML numPr (только если текстовый маркер не найден)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -132,6 +149,14 @@ def get_list_marker_info(paragraph, doc):
                                         if numFmt is not None:
                                             fmt = numFmt.get(qn('w:val'))
                                             if fmt == 'bullet':
+                                                # Проверяем текст маркера в XML
+                                                lvlText = lvl.find(qn('w:lvlText'))
+                                                if lvlText is not None:
+                                                    txt_val = lvlText.get(qn('w:val'))
+                                                    if txt_val:
+                                                        clean = re.sub(r'%\d+', '', txt_val).strip()
+                                                        if clean in ['–', '—', '-']:
+                                                            return True, "тире", True
                                                 return True, "круглый маркер (•)", False
                                             elif fmt == 'decimal':
                                                 return True, "нумерованный (цифры)", True
@@ -141,17 +166,6 @@ def get_list_marker_info(paragraph, doc):
                                                 return True, f"формат '{fmt}'", True
     except:
         pass
-    
-    if re.match(r'^\d+\)', text):
-        return True, "нумерованный", True
-    if re.match(r'^[а-яё]\)', text):
-        return True, "буквенный", True
-    if re.match(r'^[a-z]\)', text):
-        return True, "буквенный", True
-    if re.match(r'^[\-–—]', text):
-        return True, "тире", True
-    if text and ord(text[0]) in [8226, 8227, 9679, 9702]:
-        return True, "круглый маркер (•)", False
     
     return False, "", True
 
@@ -216,7 +230,6 @@ def get_table_depth(table):
     return depth
 
 def find_nearest_caption(doc, tbl_pos, start_body_pos):
-    """Ищет ближайший непустой абзац перед таблицей"""
     for i in range(tbl_pos - 1, start_body_pos - 1, -1):
         elem = doc.element.body[i]
         if elem.tag.endswith('p'):
@@ -318,7 +331,6 @@ def check_word_document(file):
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
         
-        # ОПРЕДЕЛЕНИЕ ТИПА АБЗАЦА
         is_level1 = False
         is_subsection = False
         is_figure = text.startswith("Рисунок")
@@ -353,7 +365,6 @@ def check_word_document(file):
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
             
-            # Проверка жирности — ошибка только если совсем нет жирности
             if not is_paragraph_bold(p):
                 auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
             
@@ -366,6 +377,7 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"«{text[:50]}» – удалите точку в конце")
             
+            # Пустая строка после заголовка — авто
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 auto_issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
         
@@ -377,7 +389,6 @@ def check_word_document(file):
             if abs(first_line - 1.0) > 0.2:
                 auto_issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             
-            # Проверка жирности — ошибка только если совсем нет жирности
             if not is_paragraph_bold(p):
                 auto_issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
             
@@ -405,8 +416,7 @@ def check_word_document(file):
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
             
-            if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
-                manual_checks.append(f"{fig_number} – проверьте наличие пустой строки перед рисунком")
+            # Только пустая строка ПОСЛЕ рисунка — в ручную проверку
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
         
@@ -483,10 +493,12 @@ def check_word_document(file):
             if caption.rstrip().endswith("."):
                 auto_issues.append(f"Таблица {tbl_num} – удалите точку в конце названия")
             
+            # Пустая строка перед подписью — авто
             if cap_pos is not None and cap_pos > start_idx:
                 if not is_empty_paragraph(doc.paragraphs[cap_pos - 1]):
-                    manual_checks.append(f"Таблица {tbl_num} – проверьте наличие пустой строки перед подписью таблицы")
+                    auto_issues.append(f"Таблица {tbl_num} – добавьте пустую строку перед подписью таблицы")
             
+            # Только пустая строка ПОСЛЕ таблицы — в ручную проверку
             next_para = None
             for i in range(tbl_pos + 1, end_body_pos):
                 elem = doc.element.body[i]
@@ -519,6 +531,7 @@ def check_word_document(file):
             tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
             auto_issues.append(f"Таблица {tbl_num} – уберите полужирное начертание внутри таблицы")
 
+        # Перенос таблицы — в ручную проверку
         if len(table.rows) > 2:
             tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
             next_main_pos = end_body_pos
