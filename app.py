@@ -1,6 +1,7 @@
 import streamlit as st
 import docx
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.oxml.ns import qn
 import re
 
 def get_effective_alignment(paragraph):
@@ -31,21 +32,97 @@ def is_empty_paragraph(paragraph):
 def is_toc_line(text):
     """
     Определяет, является ли строка элементом содержания.
-    Признаки: заканчивается на число (номер страницы) после табуляции или пробелов.
-    Примеры:
-    - "ВВЕДЕНИЕ 5"
-    - "1. ЦИФРОВЫЕ B2B-ПЛАТФОРМЫ... 8"
-    - "ЗАКЛЮЧЕНИЕ 19"
-    - "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ 21"
+    Признаки: заканчивается на число после табуляции или пробелов.
     """
-    # Проверяем, заканчивается ли строка числом (номером страницы)
-    # Шаблон: текст, затем табуляция или множественные пробелы, затем число
     if re.search(r'[\t\s]{2,}\d+$', text):
         return True
-    # Также проверяем римские цифры в конце (для приложений)
     if re.search(r'[\t\s]{2,}[IVXLC]+$', text):
         return True
     return False
+
+def get_effective_first_line_indent(paragraph):
+    """
+    Получает отступ первой строки: сначала из параграфа, потом из стиля.
+    Возвращает значение в см или None.
+    """
+    pf = paragraph.paragraph_format
+    # Прямое значение
+    if pf.first_line_indent is not None:
+        return pf.first_line_indent.cm
+    
+    # Пробуем получить из стиля
+    try:
+        style = paragraph.style
+        if style and style.paragraph_format.first_line_indent is not None:
+            return style.paragraph_format.first_line_indent.cm
+    except:
+        pass
+    
+    # Пробуем через XML
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            ind = pPr.find(qn('w:ind'))
+            if ind is not None:
+                first_line = ind.get(qn('w:firstLine'))
+                if first_line is not None:
+                    # Значение в twips (1/20 пункта), переводим в см
+                    twips = int(first_line)
+                    cm = twips / 567  # 1 см = 567 twips
+                    return cm
+    except:
+        pass
+    
+    return None
+
+def get_effective_left_indent(paragraph):
+    """
+    Получает отступ слева: сначала из параграфа, потом из стиля.
+    """
+    pf = paragraph.paragraph_format
+    if pf.left_indent is not None:
+        return pf.left_indent.cm
+    
+    try:
+        style = paragraph.style
+        if style and style.paragraph_format.left_indent is not None:
+            return style.paragraph_format.left_indent.cm
+    except:
+        pass
+    
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            ind = pPr.find(qn('w:ind'))
+            if ind is not None:
+                left = ind.get(qn('w:left'))
+                if left is not None:
+                    twips = int(left)
+                    cm = twips / 567
+                    return cm
+    except:
+        pass
+    
+    return None
+
+def get_effective_line_spacing(paragraph):
+    """
+    Возвращает (rule, value) для межстрочного интервала.
+    rule: тип интервала (WD_LINE_SPACING)
+    value: значение
+    """
+    pf = paragraph.paragraph_format
+    if pf.line_spacing_rule is not None and pf.line_spacing is not None:
+        return pf.line_spacing_rule, pf.line_spacing
+    
+    try:
+        style = paragraph.style
+        if style and style.paragraph_format.line_spacing_rule is not None:
+            return style.paragraph_format.line_spacing_rule, style.paragraph_format.line_spacing
+    except:
+        pass
+    
+    return None, None
 
 def check_word_document(file):
     doc = docx.Document(file)
@@ -76,13 +153,14 @@ def check_word_document(file):
         if is_toc_line(txt):
             continue
         
-        # Ищем ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ без номера страницы
+        # Ищем ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
         if txt.upper() in level1_keywords:
             start_idx = i
             break
         
-        # Ищем заголовки глав: "1. НАЗВАНИЕ" (номер, точка, пробел, 2+ заглавные буквы)
-        if re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', txt):
+        # Ищем заголовки глав: "1. НАЗВАНИЕ" 
+        # Изменено: достаточно одной заглавной буквы после номера
+        if re.match(r'^\d+\.\s+[А-ЯЁ]', txt):
             start_idx = i
             break
     
@@ -100,8 +178,6 @@ def check_word_document(file):
     # ---------- 4. ПРОВЕРКА ОСНОВНОГО ТЕКСТА (до списка источников) ----------
     figure_counter = 0
     prev_para_empty = False
-    
-    # Конец проверки — либо список источников, либо конец документа
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
 
     for idx in range(start_idx, end_idx):
@@ -112,7 +188,7 @@ def check_word_document(file):
             prev_para_empty = True
             continue
         
-        # Пропускаем строки содержания, если они случайно попали в основной текст
+        # Пропускаем строки содержания
         if is_toc_line(text):
             prev_para_empty = False
             continue
@@ -120,16 +196,17 @@ def check_word_document(file):
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
         
-        # Определяем тип абзаца СТРОГО по шаблонам
+        # Определяем тип абзаца
         is_level1 = False
         is_subsection = False
         is_figure = text.startswith("Рисунок")
         is_table_caption = text.startswith("Таблица")
         
-        # Раздел первого уровня
+        # Раздел первого уровня: ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
         if text.upper() in level1_keywords:
             is_level1 = True
-        elif re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', text):
+        # Раздел первого уровня: "1. НАЗВАНИЕ" (номер, точка, пробел, заглавная буква)
+        elif re.match(r'^\d+\.\s+[А-ЯЁ]', text):
             is_level1 = True
         # Подраздел: "1.1. Название" или "1.1.1. Название"
         elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
@@ -152,7 +229,8 @@ def check_word_document(file):
                     issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
             
             # Отступ 0
-            if pf.first_line_indent and abs(pf.first_line_indent.cm) > 0.1:
+            first_line = get_effective_first_line_indent(p)
+            if first_line is not None and abs(first_line) > 0.1:
                 issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
             # Полужирный
             if not is_paragraph_bold(p):
@@ -174,10 +252,11 @@ def check_word_document(file):
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
             # Отступ 1 см
-            if not pf.first_line_indent:
+            first_line = get_effective_first_line_indent(p)
+            if first_line is None:
                 issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см")
-            elif abs(pf.first_line_indent.cm - 1.0) > 0.2:
-                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {pf.first_line_indent.cm:.1f})")
+            elif abs(first_line - 1.0) > 0.2:
+                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f})")
             # Полужирный
             if not is_paragraph_bold(p):
                 issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
@@ -195,36 +274,33 @@ def check_word_document(file):
                 issues.append(f"Рисунок {figure_counter} – выровняйте подпись по центру")
             if text.endswith("."):
                 issues.append(f"Рисунок {figure_counter} – удалите точку в конце")
-            # Название с большой буквы
             m = re.match(r'^Рисунок\s+\d+\s*[–\-]\s*(.+)$', text)
             if m:
                 title = m.group(1).strip()
                 if title and title[0].islower():
                     issues.append(f"Рисунок {figure_counter} – название должно начинаться с большой буквы")
-            # Пустые строки
             if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
                 issues.append(f"Рисунок {figure_counter} – добавьте пустую строку перед рисунком")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 issues.append(f"Рисунок {figure_counter} – добавьте пустую строку после рисунка")
         
-        # --- Подпись таблицы (пропускаем, проверим отдельно) ---
+        # --- Подпись таблицы ---
         elif is_table_caption:
             pass
         
-        # --- Обычный текст (все остальные строки) ---
+        # --- Обычный текст ---
         else:
-            # Отступ 1 см
-            if not pf.first_line_indent:
+            first_line = get_effective_first_line_indent(p)
+            if first_line is None:
                 issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см")
-            elif abs(pf.first_line_indent.cm - 1.0) > 0.2:
-                issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {pf.first_line_indent.cm:.1f})")
-            # Интервал перед 0 пт
+            elif abs(first_line - 1.0) > 0.2:
+                issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f})")
             if pf.space_before and pf.space_before.pt > 0.5:
                 issues.append(f"«{text[:50]}» – интервал перед абзацем должен быть 0 пт")
         
         prev_para_empty = False
 
-    # ---------- 5. ТАБЛИЦЫ В ОСНОВНОМ ТЕКСТЕ (до списка источников) ----------
+    # ---------- 5. ТАБЛИЦЫ ----------
     try:
         start_element = doc.paragraphs[start_idx]._element
         start_body_pos = list(doc.element.body).index(start_element)
@@ -251,7 +327,6 @@ def check_word_document(file):
     for t_idx, table in enumerate(main_tables, start=1):
         tbl_pos = list(doc.element.body).index(table._element)
         
-        # Ищем подпись таблицы
         caption_para = None
         for i in range(tbl_pos - 1, start_body_pos - 1, -1):
             elem = doc.element.body[i]
@@ -271,25 +346,20 @@ def check_word_document(file):
                     caption_idx = i
                     break
             
-            # Формат "Таблица N -- Название"
             if not re.match(r'Таблица\s+\d+\s+--\s+', caption):
                 issues.append(f"Таблица {t_idx} – оформление подписи: должно быть «Таблица N -- Название»")
             
-            # Номер совпадает
             m_num = re.search(r'Таблица\s+(\d+)', caption)
             if m_num and int(m_num.group(1)) != t_idx:
                 issues.append(f"Таблица {t_idx} – номер в подписи не соответствует порядковому (должен быть {t_idx})")
             
-            # Без точки
             if caption.rstrip().endswith("."):
                 issues.append(f"Таблица {t_idx} – удалите точку в конце названия")
             
-            # Пустая строка перед подписью
             if caption_idx is not None and caption_idx > start_idx:
                 if not is_empty_paragraph(doc.paragraphs[caption_idx - 1]):
                     issues.append(f"Таблица {t_idx} – добавьте пустую строку перед подписью таблицы")
             
-            # Пустая строка после таблицы
             next_para = None
             for i in range(tbl_pos + 1, end_body_pos):
                 elem = doc.element.body[i]
@@ -304,7 +374,6 @@ def check_word_document(file):
         else:
             issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
 
-        # Полужирный внутри таблицы
         bold_in_table = False
         for row in table.rows:
             for cell in row.cells:
@@ -331,29 +400,34 @@ def check_word_document(file):
             if not source.text.strip():
                 continue
             
-            pf = source.paragraph_format
-            has_issue = False
+            # Проверяем отступ слева
+            left_indent = get_effective_left_indent(source)
+            left_issue = False
+            if left_indent is not None and abs(left_indent) > 0.1:
+                left_issue = True
             
-            # Отступ слева 0 см
-            if pf.left_indent and abs(pf.left_indent.cm) > 0.1:
-                has_issue = True
+            # Проверяем отступ первой строки
+            first_line = get_effective_first_line_indent(source)
+            first_line_issue = False
+            if first_line is None or abs(first_line - 1.0) > 0.1:
+                first_line_issue = True
             
-            # Отступ первой строки 1 см
-            if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.1:
-                has_issue = True
-            
-            # Междустрочный интервал 1,2
-            if pf.line_spacing_rule == WD_LINE_SPACING.MULTIPLE:
-                if abs(pf.line_spacing - 1.2) > 0.05:
-                    has_issue = True
+            # Проверяем межстрочный интервал
+            rule, value = get_effective_line_spacing(source)
+            spacing_issue = False
+            if rule is None:
+                spacing_issue = True
+            elif rule == WD_LINE_SPACING.MULTIPLE:
+                if abs(value - 1.2) > 0.05:
+                    spacing_issue = True
             else:
-                has_issue = True
+                spacing_issue = True
             
-            # Выравнивание по ширине
+            # Проверяем выравнивание
             if get_effective_alignment(source) != WD_ALIGN_PARAGRAPH.JUSTIFY:
-                has_issue = True
+                spacing_issue = True  # используем spacing_issue как общий флаг, но это не точно
             
-            if has_issue:
+            if left_issue or first_line_issue or spacing_issue or get_effective_alignment(source) != WD_ALIGN_PARAGRAPH.JUSTIFY:
                 sources_with_issues += 1
         
         if sources_with_issues > 0:
