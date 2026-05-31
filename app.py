@@ -77,6 +77,10 @@ def check_word_document(file):
     figure_counter = 0
     prev_para_empty = False
     
+    # Словари для отслеживания повторов заголовков и подразделов
+    seen_level1 = set()
+    seen_subsections = {}
+    
     # Конец проверки — либо список источников, либо конец документа
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
 
@@ -97,68 +101,81 @@ def check_word_document(file):
         is_figure = text.startswith("Рисунок")
         is_table_caption = text.startswith("Таблица")
         
-        # Раздел первого уровня: "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"
+        # Раздел первого уровня
         if text.upper() in level1_keywords:
             is_level1 = True
-        # Раздел первого уровня: "1. НАЗВАНИЕ ГЛАВЫ" (номер, точка, пробел, 2+ заглавные буквы)
+            heading_key = text.upper()
         elif re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', text):
             is_level1 = True
+            heading_key = re.sub(r'^(\d+\.\s+).*', r'\1', text)  # Ключ по номеру главы
         # Подраздел: "1.1. Название" или "1.1.1. Название"
         elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
             is_subsection = True
-
+            subsection_key = re.match(r'^(\d+\.\d+(?:\.\d+)?)\s+', text).group(1)  # Ключ по номеру
+        
         # --- Заголовок раздела ---
         if is_level1:
-            # Новая страница (кроме ВВЕДЕНИЯ, если оно первое)
-            if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
-                page_break = False
-                if idx > start_idx:
-                    prev_p = doc.paragraphs[idx - 1]
-                    for run in prev_p.runs:
+            # Проверяем только если это второе появление (первое было в содержании)
+            if heading_key in seen_level1:
+                # Новая страница (кроме ВВЕДЕНИЯ, если оно первое)
+                if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
+                    page_break = False
+                    if idx > start_idx:
+                        prev_p = doc.paragraphs[idx - 1]
+                        for run in prev_p.runs:
+                            if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
+                                page_break = True
+                    for run in p.runs:
                         if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
                             page_break = True
-                for run in p.runs:
-                    if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                        page_break = True
-                if not page_break:
-                    issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
-            
-            # Отступ 0
-            if pf.first_line_indent and abs(pf.first_line_indent.cm) > 0.1:
-                issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
-            # Полужирный
-            if not is_paragraph_bold(p):
-                issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
-            # Прописные
-            if text != text.upper():
-                issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
-            # Центр
-            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
-            # Без точки
-            if text.endswith("."):
-                issues.append(f"«{text[:50]}» – удалите точку в конце")
-            # Пустая строка после
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
+                    if not page_break:
+                        issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
+                
+                # Отступ 0
+                if pf.first_line_indent and abs(pf.first_line_indent.cm) > 0.1:
+                    issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
+                # Полужирный
+                if not is_paragraph_bold(p):
+                    issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
+                # Прописные
+                if text != text.upper():
+                    issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
+                # Центр
+                if alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                    issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
+                # Без точки
+                if text.endswith("."):
+                    issues.append(f"«{text[:50]}» – удалите точку в конце")
+                # Пустая строка после
+                if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
+                    issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
+            else:
+                seen_level1.add(heading_key)
         
         # --- Подраздел ---
         elif is_subsection:
-            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
-            # Отступ 1 см
-            if not pf.first_line_indent:
-                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см")
-            elif abs(pf.first_line_indent.cm - 1.0) > 0.2:
-                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {pf.first_line_indent.cm:.1f})")
-            # Полужирный
-            if not is_paragraph_bold(p):
-                issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
-            # Без точки в конце
-            if text.endswith("."):
-                issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
-            # Нет пустой строки перед
-            if prev_para_empty:
-                issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
+            # Считаем количество появлений этого подраздела
+            if subsection_key not in seen_subsections:
+                seen_subsections[subsection_key] = 0
+            seen_subsections[subsection_key] += 1
+            
+            # Проверяем только ВТОРОЕ появление (первое в содержании, второе в тексте)
+            if seen_subsections[subsection_key] == 2:
+                sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
+                # Отступ 1 см
+                if not pf.first_line_indent:
+                    issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см")
+                elif abs(pf.first_line_indent.cm - 1.0) > 0.2:
+                    issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {pf.first_line_indent.cm:.1f})")
+                # Полужирный
+                if not is_paragraph_bold(p):
+                    issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
+                # Без точки в конце
+                if text.endswith("."):
+                    issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
+                # Нет пустой строки перед
+                if prev_para_empty:
+                    issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
         
         # --- Рисунок ---
         elif is_figure:
