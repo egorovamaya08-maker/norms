@@ -304,14 +304,10 @@ def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty
     
     return errors
 
-def check_page_numbering(file):
+def check_page_numbering(file, intro_start_idx):
     """
-    Проверяет нумерацию страниц в секции с ВВЕДЕНИЕМ.
-    - Автонумерация (поле PAGE)
-    - Размер шрифта 14 pt
-    - Выравнивание по центру
-    - Без пустых строк после номера
-    - Не проверяет начальный номер (автонумерация сама посчитает)
+    Проверяет нумерацию страниц в секции, где начинается ВВЕДЕНИЕ.
+    intro_start_idx - позиция элемента ВВЕДЕНИЕ в body
     """
     issues = []
     
@@ -323,56 +319,35 @@ def check_page_numbering(file):
                 'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
             }
             
-            # Ищем секцию с ВВЕДЕНИЕМ
             body = doc_xml.find('.//w:body', nsmap)
-            sections = []
-            current_paras = []
             
-            for elem in body:
-                if elem.tag == qn('w:sectPr'):
-                    sections.append(current_paras)
-                    current_paras = []
-                elif elem.tag == qn('w:p'):
-                    current_paras.append(elem)
-                elif elem.tag == qn('w:tbl'):
-                    current_paras.append(elem)
-            
-            if current_paras:
-                sections.append(current_paras)
-            
-            # Ищем ВВЕДЕНИЕ
-            intro_section_idx = None
-            
-            for sec_idx, sec_paras in enumerate(sections):
-                for para in sec_paras:
-                    if para.tag == qn('w:p'):
-                        texts = []
-                        for t in para.findall('.//w:t', nsmap):
-                            if t.text:
-                                texts.append(t.text)
-                        full_text = ''.join(texts).strip().upper()
-                        if full_text == 'ВВЕДЕНИЕ':
-                            intro_section_idx = sec_idx
-                            break
-                if intro_section_idx is not None:
-                    break
-            
-            if intro_section_idx is None:
-                return []  # Нет ВВЕДЕНИЯ — не проверяем
-            
-            # Получаем sectPr для секции с ВВЕДЕНИЕМ
-            sectPrs = doc_xml.findall('.//w:sectPr', nsmap)
-            if intro_section_idx >= len(sectPrs):
+            # Находим элемент ВВЕДЕНИЕ в body по индексу
+            body_elements = list(body)
+            if intro_start_idx >= len(body_elements):
                 return []
             
-            sect = sectPrs[intro_section_idx]
+            # Ищем sectPr, который относится к этому элементу
+            # sectPr находится в конце секции, ищем ближайший sectPr после ВВЕДЕНИЯ
+            target_sectPr = None
             
-            # Проверяем колонтитулы
-            footer_refs = sect.findall('.//w:footerReference', nsmap)
+            for i in range(intro_start_idx, len(body_elements)):
+                if body_elements[i].tag == qn('w:sectPr'):
+                    target_sectPr = body_elements[i]
+                    break
+            
+            if target_sectPr is None:
+                # Может быть в конце body
+                target_sectPr = body.find('.//w:sectPr', nsmap)
+            
+            if target_sectPr is None:
+                return []
+            
+            # Проверяем колонтитулы в этой секции
+            footer_refs = target_sectPr.findall('.//w:footerReference', nsmap)
             
             if not footer_refs:
-                issues.append("Нумерация страниц – отсутствует нижний колонтитул")
-                return issues
+                # Может быть унаследован от предыдущей секции — не ошибка
+                return []
             
             # Читаем связи
             try:
@@ -422,11 +397,9 @@ def check_page_numbering(file):
                         jc = para.find('.//w:jc', nsmap)
                         align = jc.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val') if jc is not None else None
                         
-                        # Размер шрифта (только в параграфе с PAGE)
-                        sz = None
+                        # Размер шрифта (в run с PAGE)
                         font_size = None
                         if has_page:
-                            # Ищем размер шрифта в run с PAGE
                             for r in para.findall('.//w:r', nsmap):
                                 rPr = r.find('.//w:rPr', nsmap)
                                 if rPr is not None:
@@ -477,7 +450,7 @@ def check_page_numbering(file):
                     if page_para_errors:
                         issues.append(f"Нумерация страниц – {', '.join(page_para_errors)}")
                     
-                    return issues  # Проверили первый колонтитул
+                    return issues
                     
                 except:
                     continue
@@ -488,7 +461,6 @@ def check_page_numbering(file):
     return issues
 
 def group_issues(issues_list):
-    """Группирует ошибки по ключу"""
     auto_issues = []
     manual_issues = []
     manual_section = False
@@ -583,11 +555,7 @@ def check_word_document(file):
     if not margins_ok:
         auto_issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
 
-    # ---------- 2. НУМЕРАЦИЯ СТРАНИЦ ----------
-    page_issues = check_page_numbering(file)
-    auto_issues.extend(page_issues)
-
-    # ---------- 3. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
+    # ---------- 2. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
     start_idx = None
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
     
@@ -605,6 +573,28 @@ def check_word_document(file):
     
     if start_idx is None:
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
+
+    # ---------- 3. НУМЕРАЦИЯ СТРАНИЦ (после того как нашли start_idx) ----------
+    # Ищем позицию элемента ВВЕДЕНИЕ в body
+    try:
+        intro_body_idx = None
+        body_elements = list(doc.element.body)
+        for i, elem in enumerate(body_elements):
+            if elem.tag == qn('w:p'):
+                texts = []
+                for t in elem.findall('.//w:t', qn('w')):
+                    if t.text:
+                        texts.append(t.text)
+                full_text = ''.join(texts).strip().upper()
+                if full_text == 'ВВЕДЕНИЕ':
+                    intro_body_idx = i
+                    break
+        
+        if intro_body_idx is not None:
+            page_issues = check_page_numbering(file, intro_body_idx)
+            auto_issues.extend(page_issues)
+    except:
+        pass
 
     toc_entries = extract_toc_entries(doc, start_idx)
 
