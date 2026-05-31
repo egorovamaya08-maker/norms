@@ -1,6 +1,7 @@
 import streamlit as st
 import docx
 from docx.oxml.ns import qn
+from lxml import etree
 import re
 
 def has_page_number(text):
@@ -58,7 +59,6 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    """Проверяет, является ли текст заголовком раздела"""
     if re.match(r'^\d+\.\s+[А-ЯЁ]', text) and is_all_caps(text):
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
@@ -67,7 +67,80 @@ def is_section_header(text):
         return True
     return False
 
-def is_list_item(text, paragraph):
+def get_list_marker_info(paragraph, doc):
+    """
+    Определяет тип маркера для элемента списка.
+    Возвращает (marker_type, is_valid)
+    marker_type: "тире", "круглый маркер", "нумерованный", "буквенный", "не определен"
+    is_valid: True если маркер допустимый (тире), False если недопустимый (круглый)
+    """
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            numPr = pPr.find(qn('w:numPr'))
+            if numPr is not None:
+                numId_elem = numPr.find(qn('w:numId'))
+                if numId_elem is not None:
+                    numId = numId_elem.get(qn('w:val'))
+                    
+                    # Ищем определение списка в document.xml
+                    # Ищем numId в <w:num> элементах
+                    numbering_part = doc.part.numbering_part
+                    if numbering_part:
+                        numbering_xml = numbering_part._element
+                        
+                        # Ищем num с этим numId
+                        for num in numbering_xml.findall(qn('w:num')):
+                            if num.get(qn('w:numId')) == numId:
+                                # Ищем abstractNumId
+                                abstractNumId_elem = num.find(qn('w:abstractNumId'))
+                                if abstractNumId_elem is not None:
+                                    abstractNumId = abstractNumId_elem.get(qn('w:val'))
+                                    
+                                    # Ищем abstractNum с этим abstractNumId
+                                    for abstractNum in numbering_xml.findall(qn('w:abstractNum')):
+                                        if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
+                                            # Ищем lvl (уровень 0)
+                                            for lvl in abstractNum.findall(qn('w:lvl')):
+                                                if lvl.get(qn('w:ilvl')) == '0':
+                                                    # Ищем numFmt (формат номера)
+                                                    numFmt = lvl.find(qn('w:numFmt'))
+                                                    if numFmt is not None:
+                                                        fmt = numFmt.get(qn('w:val'))
+                                                        
+                                                        if fmt == 'bullet':
+                                                            # Круглый маркер - недопустимо
+                                                            return "круглый маркер (•)", False
+                                                        elif fmt == 'decimal':
+                                                            return "нумерованный", True
+                                                        elif fmt == 'lowerLetter':
+                                                            return "буквенный", True
+                                                        elif fmt == 'upperLetter':
+                                                            return "буквенный", True
+                                                        else:
+                                                            return f"другой формат ({fmt})", True
+                                                    
+                                                    # Ищем lvlText (текст маркера)
+                                                    lvlText = lvl.find(qn('w:lvlText'))
+                                                    if lvlText is not None:
+                                                        text = lvlText.get(qn('w:val'))
+                                                        if text:
+                                                            # Проверяем, содержит ли текст символы маркеров
+                                                            if '•' in text or '\u2022' in text:
+                                                                return "круглый маркер (•)", False
+                                                            if text in ['–', '—', '-']:
+                                                                return "тире", True
+                                                    
+                                                    break
+                                        
+                                        break
+                                break
+    except Exception as e:
+        pass
+    
+    return "не определен (проверьте вручную)", True
+
+def is_list_item(text, paragraph, doc):
     """Проверяет, является ли параграф элементом списка"""
     # Проверяем XML numPr
     try:
@@ -75,40 +148,36 @@ def is_list_item(text, paragraph):
         if pPr is not None:
             numPr = pPr.find(qn('w:numPr'))
             if numPr is not None:
-                return True, "список Word"
+                marker_type, is_valid = get_list_marker_info(paragraph, doc)
+                return True, marker_type, is_valid
     except:
         pass
     
     # Исключаем заголовки
     if is_section_header(text):
-        return False, ""
+        return False, "", True
     
     # Текстовые маркеры
     if re.match(r'^\d+\)', text):
-        return True, "1)"
+        return True, "нумерованный 1)", True
     if re.match(r'^[а-яё]\)', text):
-        return True, "а)"
+        return True, "буквенный а)", True
     if re.match(r'^[a-z]\)', text):
-        return True, "a)"
+        return True, "буквенный a)", True
     if re.match(r'^[\-–—]', text):
-        return True, "тире"
+        return True, "тире", True
     if re.match(r'^\*\s', text):
-        return True, "*"
+        return True, "звездочка *", False
     
     # Спецсимволы-маркеры
     if text:
         first_char = text[0]
-        # U+2022 (•), U+25E6 (◦), U+25AA (▪), U+25CF (●) и другие
-        bullet_ranges = [
-            range(0x2022, 0x2024),  # Bullets
-            range(0x25A0, 0x25FF),  # Geometric Shapes
-            range(0x26AB, 0x26AC),  # Circles
-        ]
-        for r in bullet_ranges:
-            if ord(first_char) in r:
-                return True, f"маркер U+{ord(first_char):04X}"
+        if ord(first_char) in [8226, 8227]:  # • ‣
+            return True, f"круглый маркер (U+{ord(first_char):04X})", False
+        if ord(first_char) in range(0x25A0, 0x25FF):
+            return True, f"маркер-символ (U+{ord(first_char):04X})", False
     
-    return False, ""
+    return False, "", True
 
 def normalize_title(text):
     text = re.sub(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+[\.\s]*', '', text, flags=re.IGNORECASE)
@@ -128,7 +197,6 @@ def extract_toc_entries(doc, start_idx):
     return toc_entries
 
 def find_table_continuation_markers(doc, start_pos, end_pos, table_num):
-    """Ищет Продолжение/Окончание таблицы"""
     markers_found = []
     for i in range(start_pos, min(end_pos + 1, len(doc.paragraphs))):
         txt = doc.paragraphs[i].text.strip()
@@ -165,7 +233,6 @@ def test_document(file):
     
     toc_entries = extract_toc_entries(doc, start_idx)
     
-    # Анализ заголовков
     st.write("**Заголовки в тексте:**")
     section_headers = []
     issues_found = 0
@@ -178,7 +245,7 @@ def test_document(file):
             continue
         
         # Пропускаем списки
-        is_list, _ = is_list_item(txt, p)
+        is_list, _, _ = is_list_item(txt, p, doc)
         if is_list:
             continue
         
@@ -216,10 +283,14 @@ def test_document(file):
     # ТЕСТ 2: Списки
     # ============================================
     st.subheader("📝 Тест 2: Элементы списков")
+    st.write("**Требования:**")
+    st.write("• Маркер должен быть ТИРЕ (–), а не круглый (•)")
+    st.write("• Отступ первой строки должен быть 1.0 см")
     
     list_items_found = 0
     list_items_correct = 0
     list_items_wrong = 0
+    wrong_marker_items = []
     
     for i in range(start_idx, len(doc.paragraphs)):
         p = doc.paragraphs[i]
@@ -228,7 +299,7 @@ def test_document(file):
         if not txt or has_page_number(txt):
             continue
         
-        is_list, marker_type = is_list_item(txt, p)
+        is_list, marker_type, marker_valid = is_list_item(txt, p, doc)
         
         if is_list:
             first_line = get_effective_first_line_indent(p)
@@ -236,17 +307,31 @@ def test_document(file):
             
             list_items_found += 1
             
-            if list_items_found <= 20:
-                st.write(f"**Элемент {list_items_found}** [{marker_type}] строка {i}:")
+            indent_ok = abs(first_line - 1.0) < 0.15
+            
+            if list_items_found <= 25:
+                st.write(f"**Элемент {list_items_found}** строка {i}:")
                 st.write(f"  '{txt[:70]}...'")
-                st.write(f"  Отступ: {first_line:.3f} см {'✅' if abs(first_line - 1.0) < 0.15 else '❌ нужен 1.0 см'}")
+                st.write(f"  Тип маркера: {marker_type} {'✅' if marker_valid else '❌ НЕДОПУСТИМ (нужно тире)'}")
+                st.write(f"  Отступ: {first_line:.3f} см {'✅' if indent_ok else '❌ нужен 1.0 см'}")
                 st.write(f"  XML: {xml_info}")
+                
+                if not marker_valid or not indent_ok:
+                    if not marker_valid:
+                        st.write(f"  🔴 Ошибка: замените круглый маркер на тире (–)")
+                    if not indent_ok:
+                        st.write(f"  🔴 Ошибка: установите отступ 1.0 см (сейчас {first_line:.1f} см)")
+                else:
+                    st.write(f"  🟢 Всё правильно")
+                
                 st.write("---")
             
-            if abs(first_line - 1.0) < 0.15:
+            if marker_valid and indent_ok:
                 list_items_correct += 1
             else:
                 list_items_wrong += 1
+                if not marker_valid:
+                    wrong_marker_items.append((i, txt[:50], marker_type))
         
         if list_items_found >= 100:
             break
@@ -254,15 +339,22 @@ def test_document(file):
     if list_items_found == 0:
         st.write("ℹ️ Списки не найдены")
     else:
-        st.write(f"📊 Всего: {list_items_found} | ✅ {list_items_correct} | ❌ {list_items_wrong}")
+        st.write(f"📊 Всего: {list_items_found}")
+        st.write(f"  ✅ Правильно: {list_items_correct}")
+        st.write(f"  ❌ С ошибками: {list_items_wrong}")
+        
+        if wrong_marker_items:
+            st.write("---")
+            st.write(f"**❌ Элементы с недопустимыми круглыми маркерами (нужно заменить на тире):**")
+            for idx, text, marker in wrong_marker_items:
+                st.write(f"  • Строка {idx}: [{marker}] '{text}...'")
     
     # ============================================
     # ТЕСТ 3: Таблицы
     # ============================================
     st.subheader("📊 Тест 3: Таблицы")
-    st.write("**Проверка необходимости Продолжения/Окончания таблицы**")
-    st.write("⚠️ Автоматически невозможно определить, где заканчивается страница.")
-    st.write("Проверяем ВСЕ таблицы (кроме маленьких) и предупреждаем, если нет маркеров.")
+    st.write("Проверка необходимости «Продолжение таблицы» / «Окончание таблицы»")
+    st.write("⚠️ Автоматически невозможно определить границы страниц. Проверяем все таблицы.")
     
     try:
         start_element = doc.paragraphs[start_idx]._element
@@ -305,7 +397,7 @@ def test_document(file):
         cols = len(table.columns)
         st.write(f"  Размер: {rows} строк × {cols} столбцов")
         
-        # Ищем подпись
+        # Подпись
         caption = None
         for i in range(tbl_pos - 1, start_body_pos - 1, -1):
             elem = doc.element.body[i]
@@ -329,11 +421,8 @@ def test_document(file):
             if cap_text.rstrip().endswith("."):
                 st.write(f"  ⚠️ Убрать точку в конце")
         
-        # Определяем, нужно ли проверять таблицу на перенос
-        # Проверяем ВСЕ таблицы, у которых больше 2 строк
-        # (таблица из 1-2 строк точно на одной странице)
+        # Проверка на перенос (для таблиц больше 2 строк)
         if rows > 2:
-            # Ищем следующую таблицу
             next_table_pos = end_body_pos
             for next_tbl_pos, _ in main_tables[t_idx:]:
                 if next_tbl_pos > tbl_pos:
@@ -343,36 +432,39 @@ def test_document(file):
             markers = find_table_continuation_markers(doc, tbl_pos, next_table_pos, t_idx)
             
             if not markers:
-                st.write(f"  🔴 **Нет маркеров «Продолжение таблицы {t_idx}» / «Окончание таблицы {t_idx}»**")
-                st.write(f"  💡 Проверьте вручную:")
-                st.write(f"     Если таблица на нескольких страницах — добавьте:")
+                st.write(f"  🔴 **Нет «Продолжение таблицы {t_idx}» / «Окончание таблицы {t_idx}»**")
+                st.write(f"  💡 Проверьте вручную. Если таблица на нескольких страницах, добавьте:")
                 st.write(f"     • «Продолжение таблицы {t_idx}» на следующей странице")
                 st.write(f"     • «Окончание таблицы {t_idx}» на последней странице")
                 tables_need_check += 1
             else:
-                st.write(f"  ✅ Маркеры переноса найдены:")
+                st.write(f"  ✅ Маркеры найдены:")
                 for m_pos, m_text in markers:
                     st.write(f"    • Строка {m_pos}: '{m_text}'")
         else:
             st.write(f"  ✅ Маленькая таблица, перенос маловероятен")
     
-    st.write("---")
     if tables_need_check > 0:
-        st.warning(f"⚠️ {tables_need_check} таблиц требуют ручной проверки на перенос")
+        st.warning(f"⚠️ {tables_need_check} таблиц требуют ручной проверки")
     else:
-        st.success("✅ Все таблицы в порядке (или имеют маркеры переноса)")
+        st.success("✅ Все таблицы в порядке")
     
     # ============================================
     # ИТОГИ
     # ============================================
     st.header("📊 Итоги")
-    st.write(f"• Заголовков: {len(section_headers)} (ошибок: {issues_found})")
-    st.write(f"• Списков: {list_items_found} (ошибок: {list_items_wrong})")
-    st.write(f"• Таблиц: {len(main_tables)} (нужна проверка: {tables_need_check})")
+    st.write(f"• Заголовков: {len(section_headers)} (ошибок отступа: {issues_found})")
+    st.write(f"• Списков: {list_items_found} (правильно: {list_items_correct}, ошибок: {list_items_wrong})")
+    if wrong_marker_items:
+        st.write(f"  • Из них с недопустимым маркером: {len(wrong_marker_items)}")
+    st.write(f"• Таблиц: {len(main_tables)} (нужна проверка переноса: {tables_need_check})")
 
 # Интерфейс
 st.set_page_config(page_title="Проверка документа", layout="wide")
 st.title("🧪 Проверка: заголовки, списки, таблицы")
+st.write("1. Заголовки — без отступа")
+st.write("2. Списки — маркер ТИРЕ, отступ 1.0 см")
+st.write("3. Таблицы — Продолжение/Окончание")
 
 uploaded_file = st.file_uploader("Загрузите .docx", type=["docx"])
 
