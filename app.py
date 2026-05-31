@@ -223,34 +223,85 @@ def find_nearest_caption(doc, tbl_pos, start_body_pos):
                     return para.text.strip(), i
     return None, None
 
-def is_formula_where_line(text):
-    """
-    Проверяет, является ли строка пояснением к формуле (начинается с "где")
-    Пример: "где F — сила, m — масса, a — ускорение"
-    """
-    # Начинается с "где" (с маленькой буквы) и после него идёт пробел и буква/символ
-    if re.match(r'^где\s+[А-Яа-яA-Za-z\-–—]', text):
-        return True
-    # Также может быть "Где" с большой буквы — это ошибка
-    if re.match(r'^Где\s+[А-Яа-яA-Za-z\-–—]', text):
-        return True
-    return False
-
 def is_formula_or_equation(text):
-    """
-    Определяет, является ли строка формулой или уравнением.
-    Признаки: содержит математические символы, знаки равенства, греческие буквы и т.д.
-    """
-    # Строка состоит в основном из математических символов
+    """Определяет, является ли строка формулой"""
     if re.search(r'[=≠≤≥±×÷∫∑∏√∞∂∇∈∉⊂⊃∪∩]', text):
         return True
-    # Содержит греческие буквы
     if re.search(r'[α-ωΑ-Ω]', text):
         return True
-    # Содержит нижние/верхние индексы в юникоде
     if re.search(r'[₀-₉ₐ-ₜₓᵦ-ᵧ⁰-⁹ⁱ⁻⁺ⁿ]', text):
         return True
     return False
+
+def is_formula_where_line(text):
+    """Проверяет, является ли строка пояснением к формуле (начинается с где/Где)"""
+    return bool(re.match(r'^[Гг]де\s*[:\s]?\s*[А-Яа-яA-Za-z\-–—]', text))
+
+def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty):
+    """
+    Проверяет оформление пояснения к формуле.
+    Возвращает список ошибок.
+    """
+    errors = []
+    key = "Пояснение к формуле"
+    
+    # 1. "где" должно быть с маленькой буквы
+    if text.startswith("Где"):
+        errors.append(f"{key} – «где» должно быть с маленькой буквы")
+    
+    # 2. Не должно быть двоеточия после "где"
+    if re.match(r'^[Гг]де\s*:', text):
+        errors.append(f"{key} – уберите двоеточие после «где»")
+    
+    # 3. Должен быть абзацный отступ 1 см
+    first_line = get_effective_first_line_indent(paragraph)
+    if abs(first_line - 1.0) > 0.2:
+        errors.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+    
+    # 4. Не должно быть пустой строки перед пояснением (должно идти сразу после формулы)
+    if prev_para_empty and prev_was_formula:
+        errors.append(f"{key} – уберите пустую строку перед пояснением (должно идти сразу после формулы)")
+    
+    # 5. Проверка знаков препинания в пояснениях
+    # Убираем "где" и двоеточие если есть
+    explanation_text = re.sub(r'^[Гг]де\s*:?\s*', '', text).strip()
+    
+    # Проверяем, есть ли несколько пояснений (разделённых пробелами/табуляциями)
+    # Пояснения обычно разделены на строки, но в одном параграфе они могут быть разделены табуляцией
+    lines = [l.strip() for l in explanation_text.split('\t') if l.strip()]
+    if len(lines) > 1:
+        # Многострочное пояснение в одном параграфе
+        for i, line in enumerate(lines):
+            if i < len(lines) - 1:
+                if not line.endswith(';'):
+                    # Извлекаем обозначение переменной
+                    var_match = re.match(r'^([^\s–—]+)\s*[–—]\s*(.+)$', line)
+                    var_name = var_match.group(1) if var_match else line[:20]
+                    errors.append(f"{key} – после «{var_name}» должна быть точка с запятой (;)")
+            else:
+                if not line.endswith('.'):
+                    var_match = re.match(r'^([^\s–—]+)\s*[–—]\s*(.+)$', line)
+                    var_name = var_match.group(1) if var_match else line[:20]
+                    errors.append(f"{key} – после «{var_name}» должна быть точка (.)")
+    else:
+        # Одна строка — проверяем, может быть несколько пояснений через пробел
+        # Разбиваем по шаблону "обозначение – описание"
+        parts = re.findall(r'([^\s–—]+)\s*[–—]\s*([^;.]+)([;.]?)', explanation_text)
+        
+        if len(parts) > 1:
+            for i, (var, desc, punct) in enumerate(parts):
+                if i < len(parts) - 1:
+                    if punct != ';':
+                        errors.append(f"{key} – после «{var}» должна быть точка с запятой (;)")
+                else:
+                    if punct != '.':
+                        errors.append(f"{key} – после «{var}» должна быть точка (.)")
+        elif len(parts) == 1:
+            var, desc, punct = parts[0]
+            if punct != '.':
+                errors.append(f"{key} – после «{var}» должна быть точка (.)")
+    
+    return errors
 
 def group_issues(issues_list):
     """Группирует ошибки по ключу"""
@@ -384,10 +435,8 @@ def check_word_document(file):
     # ---------- 4. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
     figure_counter = 0
     prev_para_empty = False
-    end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
-    
-    # Отслеживаем состояние для формул
     prev_was_formula = False
+    end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -395,15 +444,12 @@ def check_word_document(file):
         
         if not text:
             prev_para_empty = True
-            prev_was_formula = False
             continue
         if has_page_number(text):
             prev_para_empty = False
-            prev_was_formula = False
             continue
         if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_all_caps(text):
             prev_para_empty = False
-            prev_was_formula = False
             continue
         
         is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
@@ -411,7 +457,6 @@ def check_word_document(file):
             if not marker_valid:
                 auto_issues.append(f"«{text[:50]}» – замените круглый маркер (•) на тире, букву или цифру")
             prev_para_empty = False
-            prev_was_formula = False
             continue
         
         if is_table_continuation(text):
@@ -419,7 +464,6 @@ def check_word_document(file):
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
             prev_para_empty = False
-            prev_was_formula = False
             continue
 
         pf = p.paragraph_format
@@ -427,24 +471,12 @@ def check_word_document(file):
         
         # --- ПРОВЕРКА ПОЯСНЕНИЙ К ФОРМУЛАМ ---
         if is_formula_where_line(text):
-            # "где" должно быть с маленькой буквы
-            if text.startswith("Где"):
-                auto_issues.append(f"Пояснение к формуле – «где» должно быть с маленькой буквы")
-            
-            # Не должно быть двоеточия после "где"
-            if re.match(r'^где\s*:', text, re.IGNORECASE):
-                auto_issues.append(f"Пояснение к формуле – уберите двоеточие после «где»")
-            
-            # Должен быть абзацный отступ 1 см
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line - 1.0) > 0.2:
-                auto_issues.append(f"Пояснение к формуле – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
-            
+            errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
+            auto_issues.extend(errors)
             prev_para_empty = False
-            prev_was_formula = False
             continue
         
-        # Отслеживаем формулы для контекста
+        # Проверяем, является ли строка формулой
         if is_formula_or_equation(text):
             prev_was_formula = True
             prev_para_empty = False
