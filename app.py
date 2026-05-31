@@ -1,7 +1,6 @@
 import streamlit as st
 import docx
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
-from docx.oxml.ns import qn
 import re
 
 def get_effective_alignment(paragraph):
@@ -9,7 +8,7 @@ def get_effective_alignment(paragraph):
         return paragraph.alignment
     try:
         style = paragraph.style
-        if style and style.paragraph_format.alignment is not None:
+        if style and hasattr(style, 'paragraph_format') and style.paragraph_format.alignment is not None:
             return style.paragraph_format.alignment
     except:
         pass
@@ -29,175 +28,214 @@ def is_paragraph_bold(paragraph):
 def is_empty_paragraph(paragraph):
     return len(paragraph.text.strip()) == 0
 
-def is_all_caps(text):
-    return bool(re.match(r'^[А-ЯЁ\s\-]+$', text)) and len(text) > 3
-
-def aggressive_find_content(doc):
-    """
-    АГРЕССИВНЫЙ поиск - проверяем КАЖДЫЙ параграф
-    """
-    found_paragraphs = []
-    
-    print(f"🔍 Поиск во всех {len(doc.paragraphs)} параграфах...")
-    
+def find_content_start(doc):
+    """Ищет явный заголовок СОДЕРЖАНИЕ"""
     for i, p in enumerate(doc.paragraphs):
-        text = p.text
-        text_upper = text.upper()
-        
-        # Проверяем различные варианты
-        if 'СОДЕРЖАНИЕ' in text_upper or 'СОДЕРЖАНИЕ' in text:
-            found_paragraphs.append((i, text[:200], 'direct'))
-            continue
-        
-        # Проверяем очищенный текст (удаляем всё кроме букв)
-        cleaned = re.sub(r'[^А-Яа-яA-Za-z]', '', text_upper)
-        if 'СОДЕРЖАНИЕ' in cleaned:
-            found_paragraphs.append((i, text[:200], 'cleaned'))
-            continue
-        
-        # Проверяем через runs
-        full_run_text = ''.join([run.text for run in p.runs])
-        if 'СОДЕРЖАНИЕ' in full_run_text.upper():
-            found_paragraphs.append((i, text[:200], 'runs'))
-            continue
-        
-        # Проверяем частичное совпадение (если слово разбито)
-        if 'СОДЕРЖ' in cleaned or 'СОДЕРЖ' in text_upper:
-            found_paragraphs.append((i, text[:200], 'partial'))
-            continue
+        clean_text = re.sub(r'[^а-яА-Яa-zA-Z]', '', p.text).upper()
+        if "СОДЕРЖАНИЕ" in clean_text or "ОГЛАВЛЕНИЕ" in clean_text:
+            return i
+    return None
+
+def find_main_text_start(doc, content_idx=None):
+    """
+    Ищет начало основного текста.
+    Если content_idx задан, ищем после него. Если нет - с начала документа.
+    Приоритет: ВВЕДЕНИЕ -> Раздел 1 -> Заключение
+    """
+    start_search = content_idx + 1 if content_idx is not None else 0
     
-    return found_paragraphs
+    for i in range(start_search, len(doc.paragraphs)):
+        p = doc.paragraphs[i]
+        text = p.text.strip()
+        if not text:
+            continue
+            
+        # 1. Ищем ВВЕДЕНИЕ
+        if text.upper() == "ВВЕДЕНИЕ":
+            return i
+            
+        # 2. Ищем раздел вида "1. ТЕКСТ"
+        if re.match(r'^\d+\.\s+[А-ЯЁ]', text):
+            return i
+            
+    # Если ничего не нашли, возвращаем конец поиска (фоллбэк)
+    return start_search
 
 def check_word_document(file):
     doc = docx.Document(file)
     issues = []
-    
+    warnings = []
+
     # ---------- 1. ПОЛЯ СТРАНИЦ ----------
     margins_ok = True
     for section in doc.sections:
-        if (abs(section.left_margin.mm - 20) > 0.5 or
-            abs(section.right_margin.mm - 20) > 0.5 or
-            abs(section.top_margin.mm - 20) > 0.5 or
-            abs(section.bottom_margin.mm - 20) > 0.5):
+        try:
+            if (abs(section.left_margin.mm - 20) > 1.5 or
+                abs(section.right_margin.mm - 20) > 1.5 or
+                abs(section.top_margin.mm - 20) > 1.5 or
+                abs(section.bottom_margin.mm - 20) > 1.5):
+                margins_ok = False
+                break
+        except:
             margins_ok = False
             break
     if not margins_ok:
-        issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
+        issues.append("Поля страниц – установите 20 мм со всех сторон")
 
-    # ---------- 2. АГРЕССИВНЫЙ ПОИСК "СОДЕРЖАНИЕ" ----------
-    found = aggressive_find_content(doc)
+    # ---------- 2. ПОИСК СОДЕРЖАНИЯ И НАЧАЛА ТЕКСТА ----------
+    content_idx = find_content_start(doc)
     
-    # Показываем все параграфы, где есть упоминание "Содержание"
-    issues.append(f"📊 Всего параграфов в документе: {len(doc.paragraphs)}")
-    issues.append("")
-    
-    if found:
-        issues.append(f"✅ Найдено {len(found)} параграф(ов) с упоминанием 'Содержание':")
-        for idx, text, method in found:
-            issues.append(f"  • Параграф {idx} (найден методом: {method})")
-            issues.append(f"    Текст: {repr(text[:100])}")
-        issues.append("")
-        
-        # Берем первый найденный параграф как заголовок
-        content_idx = found[0][0]
+    if content_idx is None:
+        warnings.append("⚠️ Заголовок «СОДЕРЖАНИЕ» не найден. Проверка начата с первого раздела («ВВЕДЕНИЕ» или «1.»).")
+        main_start_idx = find_main_text_start(doc, content_idx=None)
+    else:
+        # Если содержание найдено, проверяем его оформление
         p_content = doc.paragraphs[content_idx]
-        
-        # Проверяем форматирование заголовка
+        if not get_effective_alignment(p_content) == WD_ALIGN_PARAGRAPH.CENTER:
+            issues.append("Содержание – выровняйте слово СОДЕРЖАНИЕ по центру")
+        if not is_paragraph_bold(p_content):
+            issues.append("Содержание – сделайте заголовок полужирным")
         if p_content.text.strip().endswith("."):
             issues.append("Содержание – удалите точку в конце")
         
-        alignment = get_effective_alignment(p_content)
-        if alignment is not None and alignment != WD_ALIGN_PARAGRAPH.CENTER:
-            issues.append("Содержание – выровняйте слово СОДЕРЖАНИЕ по центру")
-        
-        if not is_paragraph_bold(p_content):
-            issues.append("Содержание – сделайте заголовок полужирным")
-        
-        # Проверка пустой строки после
-        empty_found = False
-        for i in range(content_idx + 1, min(content_idx + 5, len(doc.paragraphs))):
-            if is_empty_paragraph(doc.paragraphs[i]):
-                empty_found = True
-                break
-        
-        if not empty_found and content_idx + 1 < len(doc.paragraphs):
-            issues.append("Содержание – после заголовка должна быть пустая строка")
-            
-    else:
-        issues.append("❌ Не найден заголовок «СОДЕРЖАНИЕ» — проверка невозможна.")
-        
-        # Показываем все параграфы, где есть буква "С" (для диагностики)
-        issues.append("")
-        issues.append("📋 Поиск параграфов, содержащих букву 'С' (первые 30):")
-        count = 0
-        for i, p in enumerate(doc.paragraphs):
-            text = p.text.strip()
-            if text and 'С' in text.upper():
-                issues.append(f"  {i:3d}: {repr(text[:80])}")
-                count += 1
-                if count >= 30:
-                    issues.append("  ... и другие")
-                    break
-        
-        # Показываем все стили параграфов
-        issues.append("")
-        issues.append("🎨 Стили параграфов (первые 30):")
-        for i in range(min(30, len(doc.paragraphs))):
-            p = doc.paragraphs[i]
-            style_name = p.style.name if p.style else "Без стиля"
-            text_preview = p.text[:50] if p.text else "[пусто]"
-            issues.append(f"  {i:3d}: {style_name:30} | {repr(text_preview)}")
-        
-        return issues
-    
-    # ---------- 3. ПОИСК ПЕРВОГО ЗАГОЛОВКА РАЗДЕЛА ----------
-    content_idx = found[0][0]
-    start_idx = None
-    level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
-    
-    issues.append("")
-    issues.append("📋 Поиск первого заголовка раздела после содержания:")
-    
-    for i in range(content_idx + 1, len(doc.paragraphs)):
-        p = doc.paragraphs[i]
-        txt = p.text.strip()
-        if not txt:
-            continue
-        
-        # Показываем проверяемые параграфы
-        if i < content_idx + 20:  # Показываем первые 20 после содержания
-            issues.append(f"  Проверяем параграф {i}: {repr(txt[:60])}")
-        
-        if re.match(r'^\d+\.\s+[А-Я]', txt):
-            start_idx = i
-            issues.append(f"  ✅ Найден заголовок с номером в параграфе {i}: {txt[:60]}")
-            break
-        
-        if txt.upper() in level1_keywords:
-            start_idx = i
-            issues.append(f"  ✅ Найден ключевой заголовок в параграфе {i}: {txt[:60]}")
-            break
-        
-        if is_all_caps(txt) and get_effective_alignment(p) == WD_ALIGN_PARAGRAPH.CENTER:
-            start_idx = i
-            issues.append(f"  ✅ Найден заголовок из прописных в параграфе {i}: {txt[:60]}")
-            break
-    
-    if start_idx is None:
-        issues.append("❌ Не найден ни один заголовок раздела после содержания.")
-        return issues
+        main_start_idx = find_main_text_start(doc, content_idx)
 
-    # ---------- 4. ОСТАЛЬНЫЕ ПРОВЕРКИ ----------
+    if main_start_idx >= len(doc.paragraphs):
+        issues.append("❌ Не удалось найти начало основного текста (Введение или Раздел 1).")
+        return issues + warnings
+
+    # ---------- 3. ПРОХОД ПО ОСНОВНОМУ ТЕКСТУ ----------
+    figure_counter = 0
+    prev_para_empty = False
+    
+    # Ограничиваем цикл, чтобы не зависнуть на огромных файлах, но для диплома обычно ок
+    for idx in range(main_start_idx, len(doc.paragraphs)):
+        p = doc.paragraphs[idx]
+        text = p.text.strip()
+        
+        if not text:
+            prev_para_empty = True
+            continue
+            
+        pf = p.paragraph_format
+        align = get_effective_alignment(p)
+        
+        # --- Классификация ---
+        is_level1 = False
+        is_subsection = False
+        is_figure = False
+        is_ref_header = False
+        
+        if text.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
+            is_level1 = True
+            if text.upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
+                is_ref_header = True
+        elif re.match(r'^\d+\.\s+[А-ЯЁ]', text):
+            is_level1 = True
+        elif re.match(r'^\d+\.\d+', text):
+            is_subsection = True
+        elif text.startswith("Рисунок") or text.startswith("рис."):
+            is_figure = True
+
+        # --- Проверки ---
+        
+        if is_level1:
+            title_preview = text[:40]
+            
+            # Отступ 0
+            if pf.first_line_indent and pf.first_line_indent.cm > 0.1:
+                issues.append(f"«{title_preview}…» – уберите абзацный отступ")
+            
+            # Жирный
+            if not is_paragraph_bold(p):
+                issues.append(f"«{title_preview}…» – должен быть полужирным")
+                
+            # Все заглавные
+            if text != text.upper():
+                issues.append(f"«{title_preview}…» – должен быть прописными буквами")
+                
+            # По центру
+            if align != WD_ALIGN_PARAGRAPH.CENTER:
+                issues.append(f"«{title_preview}…» – выравнивание по центру")
+                
+            # Без точки
+            if text.endswith("."):
+                issues.append(f"«{title_preview}…» – удалите точку в конце")
+                
+            # Пустая строка после
+            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx+1]):
+                issues.append(f"«{title_preview}…» – после заголовка нужна пустая строка")
+
+        elif is_subsection:
+            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()[:40]
+            
+            # Отступ 1.0 см
+            indent = pf.first_line_indent.cm if pf.first_line_indent else 0.0
+            if abs(indent - 1.0) > 0.15:
+                issues.append(f"Подраздел «{sub_name}…» – отступ 1,0 см (сейчас {indent:.1f})")
+            
+            # Жирный
+            if not is_paragraph_bold(p):
+                issues.append(f"Подраздел «{sub_name}…» – должен быть полужирным")
+                
+            # Первая заглавная
+            if sub_name and sub_name[0].islower():
+                issues.append(f"Подраздел «{sub_name}…» – первая буква прописная")
+                
+            # Без точки
+            if text.endswith("."):
+                issues.append(f"Подраздел «{sub_name}…» – удалите точку в конце")
+                
+            # Нет пустой строки перед
+            if prev_para_empty:
+                issues.append(f"Подраздел «{sub_name}…» – уберите пустую строку перед подразделом")
+
+        elif is_figure:
+            figure_counter += 1
+            if align != WD_ALIGN_PARAGRAPH.CENTER:
+                issues.append(f"Рисунок {figure_counter} – выравнивание по центру")
+            if text.endswith("."):
+                issues.append(f"Рисунок {figure_counter} – удалите точку в конце")
+            
+            # Название с большой буквы
+            m = re.search(r'[–-]\s*(.+)', text)
+            if m:
+                name_part = m.group(1).strip()
+                if name_part and name_part[0].islower():
+                    issues.append(f"Рисунок {figure_counter} – название с большой буквы")
+
+        elif is_ref_header:
+            if align != WD_ALIGN_PARAGRAPH.CENTER:
+                issues.append("Список источников – заголовок по центру")
+            if not is_paragraph_bold(p):
+                issues.append("Список источников – заголовок полужирный")
+        
+        else:
+            # Обычный текст
+            indent = pf.first_line_indent.cm if pf.first_line_indent else 0.0
+            if abs(indent - 1.0) > 0.15:
+                if len(text) > 20: 
+                     issues.append(f"Текст «{text[:30]}…» – отступ 1,0 см")
+            
+            if pf.space_before and pf.space_before.pt > 1:
+                 issues.append(f"Текст «{text[:30]}…» – интервал перед 0 пт")
+
+        prev_para_empty = False
+
+    # Убираем дубликаты
     issues = list(dict.fromkeys(issues))
-    return issues
+    
+    if not issues and not warnings:
+        return ["✅ Ошибок не найдено."]
+        
+    return warnings + issues
 
 # ========== ИНТЕРФЕЙС STREAMLIT ==========
 st.set_page_config(page_title="Нормоконтроль документов", layout="wide")
-
 st.title("📊 Автоматическая проверка документов Word")
 st.markdown("---")
 
-uploaded_file = st.file_uploader("📂 Выберите файл для проверки", type=["docx"])
+uploaded_file = st.file_uploader("📂 Выберите файл .docx", type=["docx"])
 
 if uploaded_file is not None:
     with st.spinner("🔍 Проверяем документ..."):
@@ -211,14 +249,12 @@ if uploaded_file is not None:
                     st.success(r)
                 elif r.startswith('❌'):
                     st.error(r)
-                elif r.startswith('📊') or r.startswith('📋') or r.startswith('🔍') or r.startswith('🎨'):
-                    st.info(r)
-                else:
+                elif r.startswith('⚠️'):
                     st.warning(r)
+                else:
+                    st.info(f"• {r}")
                     
         except Exception as e:
-            st.error(f"❌ Ошибка при проверке документа: {str(e)}")
-            st.exception(e)
-else:
-    st.info("👈 Загрузите документ для начала проверки")
-    
+            st.error(f"❌ Критическая ошибка: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
