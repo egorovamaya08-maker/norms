@@ -95,25 +95,20 @@ def get_list_marker_info(paragraph, doc):
     if not text:
         return False, "", True
     
-    # Тире
     if re.match(r'^[\-–—]\s', text):
         return True, "тире", True
     
-    # Нумерованные
     if re.match(r'^\d+\)\s', text):
         return True, "нумерованный", True
     
-    # Буквенные
     if re.match(r'^[а-яё]\)\s', text):
         return True, "буквенный", True
     if re.match(r'^[a-z]\)\s', text):
         return True, "буквенный", True
     
-    # Круглые маркеры (НЕдопустимо)
     if text and ord(text[0]) in [8226, 8227, 9679, 9702]:
         return True, "круглый маркер (•)", False
     
-    # Проверяем XML numPr
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -228,12 +223,37 @@ def find_nearest_caption(doc, tbl_pos, start_body_pos):
                     return para.text.strip(), i
     return None, None
 
+def is_formula_where_line(text):
+    """
+    Проверяет, является ли строка пояснением к формуле (начинается с "где")
+    Пример: "где F — сила, m — масса, a — ускорение"
+    """
+    # Начинается с "где" (с маленькой буквы) и после него идёт пробел и буква/символ
+    if re.match(r'^где\s+[А-Яа-яA-Za-z\-–—]', text):
+        return True
+    # Также может быть "Где" с большой буквы — это ошибка
+    if re.match(r'^Где\s+[А-Яа-яA-Za-z\-–—]', text):
+        return True
+    return False
+
+def is_formula_or_equation(text):
+    """
+    Определяет, является ли строка формулой или уравнением.
+    Признаки: содержит математические символы, знаки равенства, греческие буквы и т.д.
+    """
+    # Строка состоит в основном из математических символов
+    if re.search(r'[=≠≤≥±×÷∫∑∏√∞∂∇∈∉⊂⊃∪∩]', text):
+        return True
+    # Содержит греческие буквы
+    if re.search(r'[α-ωΑ-Ω]', text):
+        return True
+    # Содержит нижние/верхние индексы в юникоде
+    if re.search(r'[₀-₉ₐ-ₜₓᵦ-ᵧ⁰-⁹ⁱ⁻⁺ⁿ]', text):
+        return True
+    return False
+
 def group_issues(issues_list):
-    """
-    Группирует ошибки по ключу (первые 80 символов названия сущности).
-    Для каждого ключа объединяет сообщения через '; '.
-    """
-    # Разделяем на обычные и "Для ручной проверки"
+    """Группирует ошибки по ключу"""
     auto_issues = []
     manual_issues = []
     manual_section = False
@@ -247,62 +267,59 @@ def group_issues(issues_list):
         else:
             auto_issues.append(issue)
     
-    # Группируем авто-ошибки
     grouped = defaultdict(list)
     standalone = []
     
     for issue in auto_issues:
-        # Пытаемся извлечь ключ (текст в кавычках или название сущности)
-        match = re.match(r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|(Подраздел\s+«([^»]+)»))\s*[–-]\s*(.+)$', issue)
+        match = re.match(r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|(Подраздел\s+«([^»]+)»)|(Пояснение к формуле))\s*[–-]\s*(.+)$', issue)
         
         if match:
-            # Извлекаем ключ из разных групп
             key = None
-            if match.group(1):  # «Текст»
+            if match.group(1):
                 key = match.group(1)[:80]
-            elif match.group(2):  # Рисунок N
+            elif match.group(2):
                 key = match.group(2)
-            elif match.group(3):  # Таблица N
+            elif match.group(3):
                 key = match.group(3)
-            elif match.group(5):  # Подраздел «Текст»
+            elif match.group(5):
                 key = f"Подраздел «{match.group(5)[:50]}»"
+            elif match.group(6):
+                key = "Пояснение к формуле"
             
             if key:
-                message = match.group(6)  # Текст после тире
+                message = match.group(7) if match.lastindex >= 7 else match.group(6)
                 grouped[key].append(message)
             else:
                 standalone.append(issue)
         else:
             standalone.append(issue)
     
-    # Формируем результат
     result = []
     
-    # Сначала несгруппированные (поля, список источников)
     for issue in standalone:
         result.append(issue)
     
-    # Затем сгруппированные по ключу
     for key, messages in grouped.items():
         if len(messages) == 1:
-            # Определяем префикс
             if key.startswith("Подраздел «"):
                 result.append(f"{key} – {messages[0]}")
             elif key.startswith("Рисунок ") or key.startswith("Таблица "):
                 result.append(f"{key} – {messages[0]}")
+            elif key == "Пояснение к формуле":
+                result.append(f"{key} – {messages[0]}")
             else:
                 result.append(f"«{key}» – {messages[0]}")
         else:
-            # Несколько ошибок — объединяем через '; '
             combined = "; ".join(messages)
             if key.startswith("Подраздел «"):
                 result.append(f"{key} – {combined}")
             elif key.startswith("Рисунок ") or key.startswith("Таблица "):
                 result.append(f"{key} – {combined}")
+            elif key == "Пояснение к формуле":
+                result.append(f"{key} – {combined}")
             else:
                 result.append(f"«{key}» – {combined}")
     
-    # Добавляем ручные проверки
     if manual_issues:
         result.append("\n📋 Для ручной проверки проверяющего:")
         result.extend(manual_issues)
@@ -368,6 +385,9 @@ def check_word_document(file):
     figure_counter = 0
     prev_para_empty = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
+    
+    # Отслеживаем состояние для формул
+    prev_was_formula = False
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -375,12 +395,15 @@ def check_word_document(file):
         
         if not text:
             prev_para_empty = True
+            prev_was_formula = False
             continue
         if has_page_number(text):
             prev_para_empty = False
+            prev_was_formula = False
             continue
         if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_all_caps(text):
             prev_para_empty = False
+            prev_was_formula = False
             continue
         
         is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
@@ -388,6 +411,7 @@ def check_word_document(file):
             if not marker_valid:
                 auto_issues.append(f"«{text[:50]}» – замените круглый маркер (•) на тире, букву или цифру")
             prev_para_empty = False
+            prev_was_formula = False
             continue
         
         if is_table_continuation(text):
@@ -395,11 +419,38 @@ def check_word_document(file):
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
             prev_para_empty = False
+            prev_was_formula = False
             continue
 
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
         
+        # --- ПРОВЕРКА ПОЯСНЕНИЙ К ФОРМУЛАМ ---
+        if is_formula_where_line(text):
+            # "где" должно быть с маленькой буквы
+            if text.startswith("Где"):
+                auto_issues.append(f"Пояснение к формуле – «где» должно быть с маленькой буквы")
+            
+            # Не должно быть двоеточия после "где"
+            if re.match(r'^где\s*:', text, re.IGNORECASE):
+                auto_issues.append(f"Пояснение к формуле – уберите двоеточие после «где»")
+            
+            # Должен быть абзацный отступ 1 см
+            first_line = get_effective_first_line_indent(p)
+            if abs(first_line - 1.0) > 0.2:
+                auto_issues.append(f"Пояснение к формуле – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+            
+            prev_para_empty = False
+            prev_was_formula = False
+            continue
+        
+        # Отслеживаем формулы для контекста
+        if is_formula_or_equation(text):
+            prev_was_formula = True
+            prev_para_empty = False
+            continue
+        
+        # Определяем тип абзаца
         is_level1 = False
         is_subsection = False
         is_figure = text.startswith("Рисунок")
@@ -504,6 +555,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
         
         prev_para_empty = False
+        prev_was_formula = False
 
     # ---------- 5. ТАБЛИЦЫ ----------
     try:
