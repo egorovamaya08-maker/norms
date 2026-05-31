@@ -306,8 +306,12 @@ def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty
 
 def check_page_numbering(file):
     """
-    Проверяет нумерацию страниц ТОЛЬКО для секции с ВВЕДЕНИЕМ.
-    Возвращает список ошибок.
+    Проверяет нумерацию страниц в секции с ВВЕДЕНИЕМ.
+    - Автонумерация (поле PAGE)
+    - Размер шрифта 14 pt
+    - Выравнивание по центру
+    - Без пустых строк после номера
+    - Не проверяет начальный номер (автонумерация сама посчитает)
     """
     issues = []
     
@@ -319,7 +323,7 @@ def check_page_numbering(file):
                 'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
             }
             
-            # Собираем все sectPr
+            # Ищем секцию с ВВЕДЕНИЕМ
             body = doc_xml.find('.//w:body', nsmap)
             sections = []
             current_paras = []
@@ -336,7 +340,7 @@ def check_page_numbering(file):
             if current_paras:
                 sections.append(current_paras)
             
-            # Ищем секцию с ВВЕДЕНИЕМ
+            # Ищем ВВЕДЕНИЕ
             intro_section_idx = None
             
             for sec_idx, sec_paras in enumerate(sections):
@@ -354,26 +358,14 @@ def check_page_numbering(file):
                     break
             
             if intro_section_idx is None:
-                return []  # Не нашли ВВЕДЕНИЕ — не проверяем нумерацию
+                return []  # Нет ВВЕДЕНИЯ — не проверяем
             
-            # Получаем sectPr для этой секции
+            # Получаем sectPr для секции с ВВЕДЕНИЕМ
             sectPrs = doc_xml.findall('.//w:sectPr', nsmap)
             if intro_section_idx >= len(sectPrs):
                 return []
             
             sect = sectPrs[intro_section_idx]
-            
-            # Проверяем начальный номер
-            pgNumType = sect.find('.//w:pgNumType', nsmap)
-            start_page = None
-            if pgNumType is not None:
-                start_attr = pgNumType.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}start')
-                if start_attr:
-                    start_page = int(start_attr)
-            
-            if start_page is None or start_page != 5:
-                current = start_page if start_page else "не задан"
-                issues.append(f"Нумерация страниц – неверная нумерация (начальный номер должен быть 5, сейчас {current})")
             
             # Проверяем колонтитулы
             footer_refs = sect.findall('.//w:footerReference', nsmap)
@@ -393,7 +385,7 @@ def check_page_numbering(file):
                     if 'footer' in rel_type.lower():
                         rels_map[rel_id] = target
             except:
-                pass
+                return []
             
             # Проверяем первый нижний колонтитул
             for footer_ref in footer_refs:
@@ -430,13 +422,22 @@ def check_page_numbering(file):
                         jc = para.find('.//w:jc', nsmap)
                         align = jc.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val') if jc is not None else None
                         
-                        # Размер шрифта
-                        sz = para.find('.//w:sz', nsmap)
+                        # Размер шрифта (только в параграфе с PAGE)
+                        sz = None
                         font_size = None
-                        if sz is not None:
-                            sz_val = sz.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val')
-                            if sz_val:
-                                font_size = int(sz_val) / 2
+                        if has_page:
+                            # Ищем размер шрифта в run с PAGE
+                            for r in para.findall('.//w:r', nsmap):
+                                rPr = r.find('.//w:rPr', nsmap)
+                                if rPr is not None:
+                                    sz = rPr.find('.//w:sz', nsmap)
+                                    if sz is None:
+                                        sz = rPr.find('.//w:szCs', nsmap)
+                                    if sz is not None:
+                                        sz_val = sz.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val')
+                                        if sz_val:
+                                            font_size = int(sz_val) / 2
+                                            break
                         
                         paragraphs.append({
                             'text': full_text,
@@ -450,7 +451,6 @@ def check_page_numbering(file):
                     has_page_in_footer = any(p['has_page'] for p in paragraphs)
                     
                     if not has_page_in_footer:
-                        # Проверяем статичные номера
                         static_numbers = [p for p in paragraphs if p['text'].isdigit()]
                         if static_numbers:
                             issues.append("Нумерация страниц – используйте автонумерацию (поле PAGE) вместо статичного номера")
@@ -458,32 +458,32 @@ def check_page_numbering(file):
                             issues.append("Нумерация страниц – отсутствует нумерация в колонтитуле")
                         return issues
                     
-                    # Анализируем параграфы с нумерацией
+                    # Проверяем форматирование
+                    page_para_errors = []
                     for j, p in enumerate(paragraphs):
                         if p['has_page']:
-                            # Размер шрифта
-                            if p['font_size'] is not None:
-                                if abs(p['font_size'] - 14) > 0.5:
-                                    issues.append(f"Нумерация страниц – размер шрифта {p['font_size']} pt (должен быть 14)")
+                            if p['font_size'] is not None and abs(p['font_size'] - 14) > 0.5:
+                                page_para_errors.append(f"размер шрифта {p['font_size']} pt (должен быть 14)")
                             
-                            # Выравнивание
                             if p['alignment'] != 'center':
-                                issues.append(f"Нумерация страниц – выравнивание должно быть по центру")
+                                page_para_errors.append("выравнивание должно быть по центру")
                             
-                            # Проверяем пустую строку после
                             if j + 1 < len(paragraphs) and paragraphs[j + 1]['is_empty']:
-                                issues.append(f"Нумерация страниц – уберите пустую строку после номера")
+                                page_para_errors.append("уберите пустую строку после номера")
                         
                         elif p['is_empty'] and j > 0 and paragraphs[j-1]['has_page']:
-                            issues.append(f"Нумерация страниц – уберите пустую строку после номера")
+                            page_para_errors.append("уберите пустую строку после номера")
                     
-                    return issues  # Проверили первый колонтитул, выходим
+                    if page_para_errors:
+                        issues.append(f"Нумерация страниц – {', '.join(page_para_errors)}")
+                    
+                    return issues  # Проверили первый колонтитул
                     
                 except:
                     continue
             
-    except Exception as e:
-        pass  # Если не удалось проверить — просто не добавляем ошибок
+    except Exception:
+        pass
     
     return issues
 
@@ -685,7 +685,6 @@ def check_word_document(file):
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
         
-        # --- ПРОВЕРКА ПОЯСНЕНИЙ К ФОРМУЛАМ ---
         if is_formula_where_line(text):
             errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
             auto_issues.extend(errors)
@@ -697,7 +696,6 @@ def check_word_document(file):
             prev_para_empty = False
             continue
         
-        # Определяем тип абзаца
         is_level1 = False
         is_subsection = False
         is_figure = text.startswith("Рисунок")
@@ -713,7 +711,6 @@ def check_word_document(file):
             if in_toc and len(text) > 20:
                 is_subsection = True
 
-        # --- Заголовок раздела ---
         if is_level1:
             key = text[:80]
             
@@ -749,7 +746,6 @@ def check_word_document(file):
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
         
-        # --- Подраздел ---
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
@@ -767,7 +763,6 @@ def check_word_document(file):
             if prev_para_empty:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
         
-        # --- Рисунок ---
         elif is_figure:
             figure_counter += 1
             fig_match = re.match(r'^(Рисунок\s+\d+(?:\.\d+)?)', text)
@@ -788,11 +783,9 @@ def check_word_document(file):
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
         
-        # --- Подпись таблицы ---
         elif is_table_caption:
             pass
         
-        # --- Обычный текст ---
         else:
             key = text[:50]
             first_line = get_effective_first_line_indent(p)
