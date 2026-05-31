@@ -45,41 +45,33 @@ def check_word_document(file):
         issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
 
     # ---------- 2. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
+    # Ищем ТОЛЬКО явные заголовки разделов: "ВВЕДЕНИЕ" или "1. НАЗВАНИЕ"
+    # Прописные строки по центру НЕ считаем заголовками разделов — они могут быть титульными
     start_idx = None
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
     
     for i, p in enumerate(doc.paragraphs):
-        txt = p.text.strip()
+        txt = p.text.strip().upper()
         if not txt:
             continue
         
-        # Заголовок с номером: "1. НАЗВАНИЕ", "2. НАЗВАНИЕ"
+        # Только ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
+        if txt in level1_keywords:
+            start_idx = i
+            break
+        
+        # Только заголовки с номером: "1. НАЗВАНИЕ", "2. НАЗВАНИЕ"
         if re.match(r'^\d+\.\s+[А-Я]', txt):
-            start_idx = i
-            break
-        
-        # Ключевые слова: ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
-        if txt.upper() in level1_keywords:
-            start_idx = i
-            break
-        
-        # Полностью прописная строка по центру (безномерной заголовок раздела)
-        if (re.match(r'^[А-ЯЁ\s\-]+$', txt) and 
-            len(txt) > 5 and 
-            get_effective_alignment(p) == WD_ALIGN_PARAGRAPH.CENTER):
             start_idx = i
             break
     
     if start_idx is None:
-        # Если вообще ничего не нашли — проверять нечего
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
 
     # ---------- 3. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
     figure_counter = 0
     prev_para_empty = False
     subsection_re = re.compile(r'^\d+\.\d+')
-    # Собираем подписи таблиц для проверки в блоке таблиц
-    table_captions = []
 
     for idx in range(start_idx, len(doc.paragraphs)):
         p = doc.paragraphs[idx]
@@ -94,10 +86,7 @@ def check_word_document(file):
         
         # Определяем тип абзаца
         is_level1 = (text.upper() in level1_keywords or
-                     bool(re.match(r'^\d+\.\s+[А-Я]', text)) or
-                     (bool(re.match(r'^[А-ЯЁ\s\-]+$', text)) and 
-                      len(text) > 5 and 
-                      alignment == WD_ALIGN_PARAGRAPH.CENTER))
+                     bool(re.match(r'^\d+\.\s+[А-Я]', text)))
         
         is_subsection = bool(subsection_re.match(text)) and not is_level1
         is_figure = text.startswith("Рисунок")
@@ -105,8 +94,8 @@ def check_word_document(file):
 
         # --- Заголовок раздела ---
         if is_level1:
-            # Новая страница (кроме ВВЕДЕНИЯ)
-            if text.upper() != "ВВЕДЕНИЕ":
+            # Новая страница (кроме ВВЕДЕНИЯ, если оно первое)
+            if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
                 page_break = False
                 if idx > start_idx:
                     prev_p = doc.paragraphs[idx - 1]
@@ -140,6 +129,7 @@ def check_word_document(file):
         
         # --- Подраздел ---
         elif is_subsection:
+            # Извлекаем название (всё после номера)
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
             # Отступ 1 см
             if not pf.first_line_indent:
@@ -149,14 +139,7 @@ def check_word_document(file):
             # Полужирный
             if not is_paragraph_bold(p):
                 issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
-            # Первая прописная, остальные строчные
-            if sub_name and sub_name[0].islower():
-                issues.append(f"Подраздел «{sub_name[:50]}» – первая буква должна быть прописной")
-            elif sub_name and len(sub_name) > 1:
-                rest = sub_name[1:]
-                if any(c.isupper() for c in rest):
-                    issues.append(f"Подраздел «{sub_name[:50]}» – после первой буквы должны быть строчные")
-            # Без точки
+            # Без точки в конце
             if text.endswith("."):
                 issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
             # Нет пустой строки перед
@@ -182,11 +165,9 @@ def check_word_document(file):
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 issues.append(f"Рисунок {figure_counter} – добавьте пустую строку после рисунка")
         
-        # --- Подпись таблицы ---
+        # --- Подпись таблицы (пропускаем, проверим отдельно) ---
         elif is_table_caption:
-            # Сохраняем для проверки в блоке таблиц
-            table_captions.append((idx, text))
-            # Не проверяем подписи таблиц на отступы и прочее как обычный текст
+            pass
         
         # --- Обычный текст ---
         else:
@@ -219,9 +200,9 @@ def check_word_document(file):
     for t_idx, table in enumerate(main_tables, start=1):
         tbl_pos = list(doc.element.body).index(table._element)
         
-        # Ищем подпись таблицы — ближайший непустой абзац перед таблицей
+        # Ищем подпись таблицы
         caption_para = None
-        for i in range(tbl_pos - 1, max(start_body_pos - 1, -1), -1):
+        for i in range(tbl_pos - 1, -1, -1):
             elem = doc.element.body[i]
             if elem.tag.endswith('p'):
                 for para in doc.paragraphs:
@@ -243,12 +224,12 @@ def check_word_document(file):
             if not re.match(r'Таблица\s+\d+\s+--\s+', caption):
                 issues.append(f"Таблица {t_idx} – оформление подписи: должно быть «Таблица N -- Название»")
             
-            # Номер в подписи совпадает с порядковым
+            # Номер совпадает
             m_num = re.search(r'Таблица\s+(\d+)', caption)
             if m_num and int(m_num.group(1)) != t_idx:
                 issues.append(f"Таблица {t_idx} – номер в подписи не соответствует порядковому (должен быть {t_idx})")
             
-            # Без точки в конце
+            # Без точки
             if caption.rstrip().endswith("."):
                 issues.append(f"Таблица {t_idx} – удалите точку в конце названия")
             
@@ -298,32 +279,46 @@ def check_word_document(file):
             break
     
     if lit_start is not None:
-        # Находим первый непустой абзац после заголовка
-        first_source = None
-        for i in range(lit_start + 1, len(doc.paragraphs)):
-            if doc.paragraphs[i].text.strip():
-                first_source = doc.paragraphs[i]
-                break
+        # Проверяем ВСЕ источники и собираем проблемы
+        lit_issues = []
+        sources_with_issues = 0
         
-        if first_source:
-            p = first_source
-            pf = p.paragraph_format
+        for i in range(lit_start + 1, len(doc.paragraphs)):
+            source = doc.paragraphs[i]
+            if not source.text.strip():
+                continue
+            
+            pf = source.paragraph_format
+            has_issue = False
             
             # Отступ слева 0 см
             if pf.left_indent and abs(pf.left_indent.cm) > 0.1:
-                issues.append("Список источников – отступ слева должен быть 0 см")
+                has_issue = True
+            
             # Отступ первой строки 1 см
             if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.1:
-                issues.append("Список источников – установите отступ первой строки 1,0 см")
-            # Междустрочный интервал 1,2 (множитель)
+                has_issue = True
+            
+            # Междустрочный интервал 1,2
             if pf.line_spacing_rule == WD_LINE_SPACING.MULTIPLE:
                 if abs(pf.line_spacing - 1.2) > 0.05:
-                    issues.append("Список источников – междустрочный интервал должен быть 1,2")
+                    has_issue = True
             else:
-                issues.append("Список источников – установите множитель междустрочного интервала 1,2")
+                has_issue = True
+            
             # Выравнивание по ширине
-            if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.JUSTIFY:
-                issues.append("Список источников – выровняйте по ширине")
+            if get_effective_alignment(source) != WD_ALIGN_PARAGRAPH.JUSTIFY:
+                has_issue = True
+            
+            if has_issue:
+                sources_with_issues += 1
+        
+        if sources_with_issues > 0:
+            issues.append(
+                f"Список источников – проверьте оформление: "
+                f"отступ слева 0 см, отступ первой строки 1,0 см, "
+                f"междустрочный интервал 1,2 (множитель), выравнивание по ширине"
+            )
 
     # ---------- ИТОГ ----------
     issues = list(dict.fromkeys(issues))
