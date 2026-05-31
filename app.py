@@ -67,12 +67,35 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    if re.match(r'^\d+\.\s+[А-ЯЁ]', text) and is_all_caps(text):
-        return True
-    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
-        return True
+    """
+    Определяет, является ли строка заголовком раздела первого уровня.
+    Дополнительные проверки:
+    - Не содержит кавычек (признак названия компании, а не заголовка)
+    - Содержит минимум 3 слова (для номерных заголовков)
+    """
+    # "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"
     if text.upper().strip() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
+    
+    # "ГЛАВА 1" или "РАЗДЕЛ 1"
+    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
+        return True
+    
+    # "1. НАЗВАНИЕ" — номер, точка, пробел, заглавные буквы
+    if re.match(r'^\d+\.\s+[А-ЯЁ]', text) and is_all_caps(text):
+        # Дополнительная проверка: не должно быть кавычек-ёлочек
+        # (кавычки внутри заголовка — признак названия компании, а не раздела)
+        if '«' in text or '»' in text:
+            return False
+        
+        # Проверяем, что это не просто "1. НазваниеКомпании" (слитно)
+        # Должно быть минимум 3 слова или длина > 30 символов
+        words = text.split()
+        if len(words) < 3 and len(text) < 30:
+            return False
+        
+        return True
+    
     return False
 
 def normalize_title(text):
@@ -305,10 +328,6 @@ def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty
     return errors
 
 def check_page_numbering(file, intro_start_idx):
-    """
-    Проверяет нумерацию страниц в секции, где начинается ВВЕДЕНИЕ.
-    intro_start_idx - позиция элемента ВВЕДЕНИЕ в body
-    """
     issues = []
     
     try:
@@ -320,14 +339,10 @@ def check_page_numbering(file, intro_start_idx):
             }
             
             body = doc_xml.find('.//w:body', nsmap)
-            
-            # Находим элемент ВВЕДЕНИЕ в body по индексу
             body_elements = list(body)
             if intro_start_idx >= len(body_elements):
                 return []
             
-            # Ищем sectPr, который относится к этому элементу
-            # sectPr находится в конце секции, ищем ближайший sectPr после ВВЕДЕНИЯ
             target_sectPr = None
             
             for i in range(intro_start_idx, len(body_elements)):
@@ -336,20 +351,16 @@ def check_page_numbering(file, intro_start_idx):
                     break
             
             if target_sectPr is None:
-                # Может быть в конце body
                 target_sectPr = body.find('.//w:sectPr', nsmap)
             
             if target_sectPr is None:
                 return []
             
-            # Проверяем колонтитулы в этой секции
             footer_refs = target_sectPr.findall('.//w:footerReference', nsmap)
             
             if not footer_refs:
-                # Может быть унаследован от предыдущей секции — не ошибка
                 return []
             
-            # Читаем связи
             try:
                 rels_xml = etree.fromstring(z.read('word/_rels/document.xml.rels'))
                 rels_map = {}
@@ -362,7 +373,6 @@ def check_page_numbering(file, intro_start_idx):
             except:
                 return []
             
-            # Проверяем первый нижний колонтитул
             for footer_ref in footer_refs:
                 ref_id = footer_ref.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
                 file_name = rels_map.get(ref_id)
@@ -383,7 +393,6 @@ def check_page_numbering(file, intro_start_idx):
                                 texts.append(t.text)
                         full_text = ''.join(texts)
                         
-                        # Поле PAGE
                         has_page = False
                         for fld in para.findall('.//w:fldChar', nsmap):
                             fld_type = fld.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fldCharType')
@@ -393,11 +402,9 @@ def check_page_numbering(file, intro_start_idx):
                             if instr.text and 'PAGE' in instr.text:
                                 has_page = True
                         
-                        # Выравнивание
                         jc = para.find('.//w:jc', nsmap)
                         align = jc.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val') if jc is not None else None
                         
-                        # Размер шрифта (в run с PAGE)
                         font_size = None
                         if has_page:
                             for r in para.findall('.//w:r', nsmap):
@@ -420,7 +427,6 @@ def check_page_numbering(file, intro_start_idx):
                             'is_empty': not bool(full_text)
                         })
                     
-                    # Проверяем наличие автонумерации
                     has_page_in_footer = any(p['has_page'] for p in paragraphs)
                     
                     if not has_page_in_footer:
@@ -431,7 +437,6 @@ def check_page_numbering(file, intro_start_idx):
                             issues.append("Нумерация страниц – отсутствует нумерация в колонтитуле")
                         return issues
                     
-                    # Проверяем форматирование
                     page_para_errors = []
                     for j, p in enumerate(paragraphs):
                         if p['has_page']:
@@ -565,7 +570,8 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        if re.match(r'^\d+\.\s+[А-Яа-я]', txt) and not is_all_caps(txt):
+        # Пропускаем нумерованные строки, которые НЕ являются заголовками разделов
+        if re.match(r'^\d+\.\s+[А-Яа-я]', txt) and not is_section_header(txt):
             continue
         if is_section_header(txt):
             start_idx = i
@@ -574,8 +580,7 @@ def check_word_document(file):
     if start_idx is None:
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
 
-    # ---------- 3. НУМЕРАЦИЯ СТРАНИЦ (после того как нашли start_idx) ----------
-    # Ищем позицию элемента ВВЕДЕНИЕ в body
+    # ---------- 3. НУМЕРАЦИЯ СТРАНИЦ ----------
     try:
         intro_body_idx = None
         body_elements = list(doc.element.body)
@@ -637,7 +642,8 @@ def check_word_document(file):
         if has_page_number(text):
             prev_para_empty = False
             continue
-        if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_all_caps(text):
+        # Пропускаем нумерованные строки, которые НЕ являются заголовками
+        if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_section_header(text):
             prev_para_empty = False
             continue
         
@@ -686,20 +692,19 @@ def check_word_document(file):
             prev_para_empty = False
             continue
         
-        is_level1 = False
+        is_level1 = is_section_header(text)
         is_subsection = False
         is_figure = text.startswith("Рисунок")
         is_table_caption = text.startswith("Таблица")
         
-        if is_section_header(text):
-            is_level1 = True
-        elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
-            is_subsection = True
-        else:
-            normalized = normalize_title(text)
-            in_toc = any(normalize_title(e) == normalized for e in toc_entries) if toc_entries else False
-            if in_toc and len(text) > 20:
+        if not is_level1:
+            if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
                 is_subsection = True
+            else:
+                normalized = normalize_title(text)
+                in_toc = any(normalize_title(e) == normalized for e in toc_entries) if toc_entries else False
+                if in_toc and len(text) > 20:
+                    is_subsection = True
 
         if is_level1:
             key = text[:80]
