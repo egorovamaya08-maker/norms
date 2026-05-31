@@ -30,15 +30,38 @@ def is_empty_paragraph(paragraph):
     return len(paragraph.text.strip()) == 0
 
 def has_page_number(text):
-    """Проверяет, заканчивается ли строка номером страницы (как в содержании)"""
-    return bool(re.search(r'[\t\s]{2,}\d+$', text))
+    """Проверяет, заканчивается ли строка номером страницы"""
+    # Проверяем разные варианты: пробелы, табуляции, точки
+    if re.search(r'[\t\s\.]{2,}\d+$', text):
+        return True
+    return False
+
+def get_paragraph_xml_info(paragraph):
+    """Выводит XML информацию о параграфе для отладки"""
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            ind = pPr.find(qn('w:ind'))
+            if ind is not None:
+                first_line = ind.get(qn('w:firstLine'))
+                left = ind.get(qn('w:left'))
+                hanging = ind.get(qn('w:hanging'))
+                return f"firstLine={first_line}, left={left}, hanging={hanging}"
+            else:
+                return "no ind element"
+        else:
+            return "no pPr element"
+    except:
+        return "error reading XML"
 
 def get_effective_first_line_indent(paragraph):
     """Получает отступ первой строки в см"""
+    # Сначала пробуем через python-docx
     pf = paragraph.paragraph_format
     if pf.first_line_indent is not None:
         return pf.first_line_indent.cm
     
+    # Потом через стиль
     try:
         style = paragraph.style
         if style and style.paragraph_format.first_line_indent is not None:
@@ -46,20 +69,24 @@ def get_effective_first_line_indent(paragraph):
     except:
         pass
     
+    # Потом через XML
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
             ind = pPr.find(qn('w:ind'))
             if ind is not None:
                 first_line = ind.get(qn('w:firstLine'))
+                hanging = ind.get(qn('w:hanging'))
                 if first_line is not None:
                     twips = int(first_line)
-                    cm = twips / 567
-                    return cm
+                    return twips / 567  # twips to cm
+                elif hanging is not None:
+                    # Если задан hanging, то отступа первой строки нет
+                    return 0
     except:
         pass
     
-    return None
+    return 0  # По умолчанию считаем что отступа нет
 
 def get_effective_left_indent(paragraph):
     """Получает отступ слева в см"""
@@ -82,31 +109,16 @@ def get_effective_left_indent(paragraph):
                 left = ind.get(qn('w:left'))
                 if left is not None:
                     twips = int(left)
-                    cm = twips / 567
-                    return cm
+                    return twips / 567
     except:
         pass
     
-    return None
-
-def get_effective_line_spacing(paragraph):
-    """Возвращает (rule, value) для межстрочного интервала"""
-    pf = paragraph.paragraph_format
-    if pf.line_spacing_rule is not None and pf.line_spacing is not None:
-        return pf.line_spacing_rule, pf.line_spacing
-    
-    try:
-        style = paragraph.style
-        if style and style.paragraph_format.line_spacing_rule is not None:
-            return style.paragraph_format.line_spacing_rule, style.paragraph_format.line_spacing
-    except:
-        pass
-    
-    return None, None
+    return 0  # По умолчанию отступа нет
 
 def check_word_document(file):
     doc = docx.Document(file)
     issues = []
+    debug_info = []  # Для отладки
 
     # ---------- 1. ПОЛЯ СТРАНИЦ ----------
     margins_ok = True
@@ -131,20 +143,23 @@ def check_word_document(file):
         
         # Пропускаем строки с номерами страниц (содержание)
         if has_page_number(txt):
+            debug_info.append(f"SKIP TOC: '{txt[:80]}'")
             continue
         
-        # Ищем заголовки: ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
+        # Ищем заголовки
         if txt.upper() in level1_keywords:
             start_idx = i
+            debug_info.append(f"FOUND START: '{txt[:80]}' at index {i}")
             break
         
-        # Ищем заголовки глав ТОЛЬКО если они ПОЛНОСТЬЮ прописные: "1. НАЗВАНИЕ"
+        # Ищем заголовки глав ТОЛЬКО если они ПОЛНОСТЬЮ прописные
         if re.match(r'^\d+\.\s+[А-ЯЁ]', txt) and txt == txt.upper():
             start_idx = i
+            debug_info.append(f"FOUND START: '{txt[:80]}' at index {i}")
             break
     
     if start_idx is None:
-        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
+        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."] + debug_info
 
     # ---------- 3. ИЩЕМ НАЧАЛО СПИСКА ИСТОЧНИКОВ ----------
     lit_start = None
@@ -167,8 +182,9 @@ def check_word_document(file):
             prev_para_empty = True
             continue
         
-        # Пропускаем строки с номерами страниц (остатки содержания)
+        # Пропускаем строки с номерами страниц
         if has_page_number(text):
+            debug_info.append(f"SKIP IN TEXT: '{text[:80]}'")
             prev_para_empty = False
             continue
 
@@ -178,25 +194,37 @@ def check_word_document(file):
         # Определяем тип абзаца
         is_level1 = False
         is_subsection = False
+        is_figure = text.startswith("Рисунок")
+        is_table_caption = text.startswith("Таблица")
         
-        # Раздел первого уровня:
-        # - "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"
-        # - "1. ПОЛНОСТЬЮ ПРОПИСНОЕ НАЗВАНИЕ"
+        # Раздел первого уровня
         if text.upper() in level1_keywords:
             is_level1 = True
         elif re.match(r'^\d+\.\s+[А-ЯЁ]', text) and text == text.upper():
             is_level1 = True
-        # Подраздел: "1.1. Название" или "1.1.1. Название"
+        # Подраздел
         elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
             is_subsection = True
-        
-        # Пропускаем рисунки и таблицы
-        is_figure = text.startswith("Рисунок")
-        is_table_caption = text.startswith("Таблица")
 
+        # Если это не заголовок, не подраздел, не рисунок и не таблица - проверяем на отступ
+        if not is_level1 and not is_subsection and not is_figure and not is_table_caption:
+            first_line = get_effective_first_line_indent(p)
+            xml_info = get_paragraph_xml_info(p)
+            
+            if abs(first_line - 1.0) > 0.2:
+                debug_info.append(f"INDENT ISSUE: '{text[:80]}' | first_line={first_line:.2f}cm | XML: {xml_info}")
+                issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+            
+            if pf.space_before and pf.space_before.pt > 0.5:
+                issues.append(f"«{text[:50]}» – интервал перед абзацем должен быть 0 пт")
+        
         # --- Заголовок раздела ---
-        if is_level1:
-            # Новая страница (кроме ВВЕДЕНИЯ, если оно первое)
+        elif is_level1:
+            first_line = get_effective_first_line_indent(p)
+            if abs(first_line) > 0.1:
+                debug_info.append(f"LEVEL1 INDENT: '{text[:80]}' | first_line={first_line:.2f}cm")
+                issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
+            
             if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
                 page_break = False
                 if idx > start_idx:
@@ -210,51 +238,36 @@ def check_word_document(file):
                 if not page_break:
                     issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
             
-            # Отступ 0
-            first_line = get_effective_first_line_indent(p)
-            if first_line is not None and abs(first_line) > 0.1:
-                issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
-            
-            # Полужирный
             if not is_paragraph_bold(p):
                 issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
             
-            # Прописные (только для номерных разделов, ВВЕДЕНИЕ и так прописное)
             if re.match(r'^\d+\.', text) and text != text.upper():
                 issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
             
-            # Центр
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
             
-            # Без точки
             if text.endswith("."):
                 issues.append(f"«{text[:50]}» – удалите точку в конце")
             
-            # Пустая строка после
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
         
         # --- Подраздел ---
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
-            
-            # Отступ 1 см
             first_line = get_effective_first_line_indent(p)
-            if first_line is None:
-                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см")
-            elif abs(first_line - 1.0) > 0.2:
-                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f})")
             
-            # Полужирный
+            if abs(first_line - 1.0) > 0.2:
+                debug_info.append(f"SUBSECTION INDENT: '{text[:80]}' | first_line={first_line:.2f}cm")
+                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+            
             if not is_paragraph_bold(p):
                 issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
             
-            # Без точки в конце
             if text.endswith("."):
                 issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
             
-            # Нет пустой строки перед
             if prev_para_empty:
                 issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
         
@@ -274,20 +287,6 @@ def check_word_document(file):
                 issues.append(f"Рисунок {figure_counter} – добавьте пустую строку перед рисунком")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 issues.append(f"Рисунок {figure_counter} – добавьте пустую строку после рисунка")
-        
-        # --- Подпись таблицы ---
-        elif is_table_caption:
-            pass
-        
-        # --- Обычный текст ---
-        else:
-            first_line = get_effective_first_line_indent(p)
-            if first_line is None:
-                issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см")
-            elif abs(first_line - 1.0) > 0.2:
-                issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f})")
-            if pf.space_before and pf.space_before.pt > 0.5:
-                issues.append(f"«{text[:50]}» – интервал перед абзацем должен быть 0 пт")
         
         prev_para_empty = False
 
@@ -384,6 +383,21 @@ def check_word_document(file):
 
     # ---------- 6. СПИСОК ИСТОЧНИКОВ ----------
     if lit_start is not None:
+        # Добавим отладку для первого источника
+        first_source = None
+        for i in range(lit_start + 1, len(doc.paragraphs)):
+            if doc.paragraphs[i].text.strip():
+                first_source = doc.paragraphs[i]
+                break
+        
+        if first_source:
+            first_line = get_effective_first_line_indent(first_source)
+            left_indent = get_effective_left_indent(first_source)
+            xml_info = get_paragraph_xml_info(first_source)
+            debug_info.append(f"FIRST SOURCE: '{first_source.text.strip()[:80]}'")
+            debug_info.append(f"  first_line={first_line:.2f}cm, left={left_indent:.2f}cm")
+            debug_info.append(f"  XML: {xml_info}")
+        
         sources_with_issues = 0
         
         for i in range(lit_start + 1, len(doc.paragraphs)):
@@ -393,28 +407,12 @@ def check_word_document(file):
             
             has_issue = False
             
-            # Проверяем отступ слева
             left_indent = get_effective_left_indent(source)
-            if left_indent is not None and abs(left_indent) > 0.1:
+            if abs(left_indent) > 0.1:
                 has_issue = True
             
-            # Проверяем отступ первой строки
             first_line = get_effective_first_line_indent(source)
-            if first_line is None or abs(first_line - 1.0) > 0.1:
-                has_issue = True
-            
-            # Проверяем межстрочный интервал
-            rule, value = get_effective_line_spacing(source)
-            if rule is None:
-                has_issue = True
-            elif rule == WD_LINE_SPACING.MULTIPLE:
-                if abs(value - 1.2) > 0.05:
-                    has_issue = True
-            else:
-                has_issue = True
-            
-            # Проверяем выравнивание
-            if get_effective_alignment(source) != WD_ALIGN_PARAGRAPH.JUSTIFY:
+            if abs(first_line - 1.0) > 0.1:
                 has_issue = True
             
             if has_issue:
@@ -427,9 +425,15 @@ def check_word_document(file):
                 "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
             )
 
+    # Показываем отладочную информацию
+    if debug_info:
+        issues.append("\n📋 ОТЛАДКА:")
+        issues.extend(debug_info)
+
     # ---------- ИТОГ ----------
-    issues = list(dict.fromkeys(issues))
-    if not issues:
+    real_issues = [i for i in issues if not i.startswith("📋") and not i.startswith("SKIP") and not i.startswith("FOUND") and not i.startswith("INDENT") and not i.startswith("LEVEL1") and not i.startswith("SUBSECTION") and not i.startswith("FIRST")]
+    
+    if not real_issues:
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
     return issues
 
