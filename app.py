@@ -765,4 +765,38 @@ def check_word_document(file):
                 continue
             
             has_issue = False
-            left_indent =
+            left_indent = get_effective_left_indent(source)
+            if abs(left_indent) > 0.1:
+                has_issue = True
+            first_line = get_effective_first_line_indent(source)
+            if abs(first_line - 1.0) > 0.1:
+                has_issue = True
+            if has_issue:
+                sources_with_issues += 1
+        
+        if sources_with_issues > 0:
+            auto_issues.append(
+                "Список источников – проверьте оформление: "
+                "отступ слева 0 см, отступ первой строки 1,0 см, "
+                "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
+            )
+
+    # ---------- ГРУППИРУЕМ И ВЫВОДИМ ----------
+    all_issues = auto_issues + manual_checks
+    return group_issues(all_issues)
+
+# Интерфейс
+st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
+st.title("📊 Автоматическая проверка документов Word")
+st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
+uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
+
+if uploaded_file is not None:
+    with st.spinner("Проверяем..."):
+        results = check_word_document(uploaded_file)
+    st.subheader("Результаты проверки:")
+    for r in results:
+        if r.startswith("📋"):
+            st.markdown(f"**{r}**")
+        else:
+            st.write(f"• {r}")
