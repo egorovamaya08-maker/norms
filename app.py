@@ -9,10 +9,7 @@ def has_page_number(text):
     return False
 
 def get_table_depth(table):
-    """
-    Определяет, не является ли таблица вложенной в другую таблицу.
-    Возвращает глубину вложенности (0 = верхний уровень)
-    """
+    """Определяет, не является ли таблица вложенной в другую таблицу"""
     depth = 0
     element = table._element
     parent = element.getparent()
@@ -25,7 +22,7 @@ def get_table_depth(table):
     return depth
 
 def find_table_continuation_markers(doc, start_pos, end_pos, table_num):
-    """Ищет Продолжение/Окончание таблицы"""
+    """Ищет Продолжение/Окончание таблицы и возвращает их позиции"""
     markers_found = []
     for i in range(start_pos, min(end_pos + 1, len(doc.paragraphs))):
         txt = doc.paragraphs[i].text.strip()
@@ -44,7 +41,7 @@ def test_document(file):
     doc = docx.Document(file)
     
     st.header("📊 Проверка таблиц")
-    st.write("Проверяем: подписи, тире, точки, переносы, вложенные таблицы")
+    st.write("Проверяем: подписи, тире, точки, переносы, исключаем части таблиц после Продолжение/Окончание")
     
     # Ищем начало основного текста
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
@@ -84,60 +81,101 @@ def test_document(file):
         except:
             pass
     
-    # Собираем ВСЕ таблицы и анализируем их
-    st.write("---")
-    st.write("**Анализ всех таблиц в документе:**")
-    
-    all_tables = []
+    # Собираем все таблицы верхнего уровня в основном тексте
+    all_main_tables = []
     for table in doc.tables:
         depth = get_table_depth(table)
+        if depth > 0:
+            continue
+        
         try:
             tbl_pos = list(doc.element.body).index(table._element)
         except:
-            tbl_pos = -1
+            continue
         
-        all_tables.append({
-            'table': table,
-            'depth': depth,
-            'pos': tbl_pos,
-            'rows': len(table.rows),
-            'cols': len(table.columns)
-        })
+        if start_body_pos < tbl_pos < end_body_pos:
+            all_main_tables.append((tbl_pos, table))
     
-    st.write(f"Всего таблиц в документе: {len(all_tables)}")
+    st.write(f"Всего таблиц верхнего уровня в тексте: {len(all_main_tables)}")
     
-    # Показываем все таблицы с их статусом
-    for i, t in enumerate(all_tables, 1):
-        in_main = start_body_pos < t['pos'] < end_body_pos
+    # Находим все маркеры Продолжение/Окончание
+    all_continuation_positions = set()
+    for tbl_pos, table in all_main_tables:
+        # Ищем номер таблицы в подписи
+        caption = None
+        for i in range(tbl_pos - 1, start_body_pos - 1, -1):
+            elem = doc.element.body[i]
+            if elem.tag.endswith('p'):
+                for para in doc.paragraphs:
+                    if para._element is elem and para.text.strip():
+                        caption = para.text.strip()
+                        break
+                if caption:
+                    break
         
-        status = ""
-        if t['depth'] > 0:
-            status = f"❌ ВЛОЖЕННАЯ (глубина {t['depth']}) - ПРОПУСКАЕМ"
-        elif not in_main:
-            status = "❌ Вне основного текста - ПРОПУСКАЕМ"
-        else:
-            status = "✅ Таблица основного текста - ПРОВЕРЯЕМ"
-        
-        st.write(f"**Таблица {i}:** позиция {t['pos']}, {t['rows']}×{t['cols']}, {status}")
+        if caption:
+            # Извлекаем номер таблицы из подписи
+            match = re.match(r'Таблица\s+([\d.]+)', caption)
+            if match:
+                table_num = match.group(1)
+                # Ищем Продолжение/Окончание для этой таблицы
+                next_table_pos = end_body_pos
+                for next_tbl_pos, _ in all_main_tables:
+                    if next_tbl_pos > tbl_pos:
+                        next_table_pos = next_tbl_pos
+                        break
+                
+                markers = find_table_continuation_markers(doc, tbl_pos, next_table_pos, table_num)
+                for marker_pos, _ in markers:
+                    all_continuation_positions.add(marker_pos)
     
-    # Теперь проверяем только таблицы основного текста
+    st.write(f"Найдено маркеров Продолжение/Окончание: {len(all_continuation_positions)}")
+    for pos in sorted(all_continuation_positions):
+        st.write(f"  • Строка {pos}: '{doc.paragraphs[pos].text.strip()[:80]}'")
+    
+    # Определяем, какие таблицы находятся после маркеров Продолжение/Окончание
+    # Таблица считается продолжением, если между ней и предыдущим маркером нет другой подписи
+    continuation_tables = set()
+    
+    for idx, (tbl_pos, table) in enumerate(all_main_tables):
+        # Проверяем, есть ли перед таблицей маркер Продолжение/Окончание
+        # и нет ли между ними подписи другой таблицы
+        for marker_pos in sorted(all_continuation_positions):
+            if marker_pos < tbl_pos:
+                # Проверяем, есть ли между маркером и таблицей подпись другой таблицы
+                has_caption_between = False
+                for i in range(marker_pos + 1, tbl_pos):
+                    txt = doc.paragraphs[i].text.strip()
+                    if txt and re.match(r'Таблица\s+[\d.]+\s+[–—]', txt):
+                        has_caption_between = True
+                        break
+                
+                if not has_caption_between:
+                    continuation_tables.add(tbl_pos)
+    
+    st.write(f"Таблиц-продолжений (после Продолжение/Окончание): {len(continuation_tables)}")
+    
+    # Оставляем только основные таблицы (не продолжения)
+    main_tables = [(pos, tbl) for pos, tbl in all_main_tables if pos not in continuation_tables]
+    
+    st.write(f"Основных таблиц для проверки: {len(main_tables)}")
+    
+    # Показываем, какие таблицы пропущены
+    if continuation_tables:
+        st.write("---")
+        st.write("**Пропущенные таблицы (части после Продолжение/Окончание):**")
+        for tbl_pos in sorted(continuation_tables):
+            st.write(f"  • Таблица на позиции {tbl_pos} - это продолжение/окончание")
+    
+    # Проверяем основные таблицы
     st.write("---")
-    st.write("**Проверка таблиц основного текста:**")
-    
-    main_tables = [(t['pos'], t['table']) for t in all_tables 
-                   if t['depth'] == 0 and start_body_pos < t['pos'] < end_body_pos]
-    
-    st.write(f"Таблиц для проверки: {len(main_tables)}")
-    
-    if len(main_tables) == 0:
-        st.warning("⚠️ Нет таблиц основного текста для проверки")
-        return
+    st.write("**Проверка основных таблиц:**")
     
     tables_need_check = 0
     
     for t_idx, (tbl_pos, table) in enumerate(main_tables, start=1):
         st.write(f"---")
-        st.write(f"**Проверяемая таблица {t_idx}** (позиция {tbl_pos})")
+        st.write(f"**Таблица {t_idx}** (позиция {tbl_pos})")
         st.write(f"  Размер: {len(table.rows)} строк × {len(table.columns)} столбцов")
         
         # Ищем подпись
@@ -157,46 +195,46 @@ def test_document(file):
             st.write(f"  Подпись: '{cap_text[:150]}'")
             
             if cap_text.startswith("Таблица"):
+                # Извлекаем номер таблицы
+                match = re.match(r'Таблица\s+([\d.]+)', cap_text)
+                table_num = match.group(1) if match else str(t_idx)
+                
                 if '—' in cap_text or '–' in cap_text:
                     st.write(f"  ✅ Тире правильное")
                 elif '--' in cap_text:
                     st.write(f"  ⚠️ Используется двойной дефис (--), нужно заменить на тире")
                 elif ' - ' in cap_text:
                     st.write(f"  ⚠️ Используется дефис, нужно заменить на тире")
-                else:
-                    st.write(f"  ⚠️ Проверьте наличие тире после номера таблицы")
                 
                 if cap_text.rstrip().endswith("."):
                     st.write(f"  ❌ Точка в конце подписи (удалите)")
                 else:
                     st.write(f"  ✅ Нет точки в конце")
+                
+                # Проверка на перенос (для таблиц больше 2 строк)
+                if len(table.rows) > 2:
+                    next_table_pos = end_body_pos
+                    for next_tbl_pos, _ in main_tables[t_idx:]:
+                        if next_tbl_pos > tbl_pos:
+                            next_table_pos = next_tbl_pos
+                            break
+                    
+                    markers = find_table_continuation_markers(doc, tbl_pos, next_table_pos, table_num)
+                    
+                    if not markers:
+                        st.write(f"  🔴 **Нет «Продолжение таблицы {table_num}» / «Окончание таблицы {table_num}»**")
+                        st.write(f"  💡 Если таблица на нескольких страницах, добавьте:")
+                        st.write(f"     • «Продолжение таблицы {table_num}» на следующей странице")
+                        st.write(f"     • «Окончание таблицы {table_num}» на последней странице")
+                        tables_need_check += 1
+                    else:
+                        st.write(f"  ✅ Маркеры переноса найдены:")
+                        for m_pos, m_text in markers:
+                            st.write(f"    • Строка {m_pos}: '{m_text}'")
             else:
                 st.write(f"  ⚠️ Подпись не начинается с 'Таблица'")
         else:
             st.write(f"  ⚠️ Подпись не найдена перед таблицей")
-        
-        # Проверка на перенос
-        if len(table.rows) > 2:
-            next_table_pos = end_body_pos
-            for next_tbl_pos, _ in main_tables[t_idx:]:
-                if next_tbl_pos > tbl_pos:
-                    next_table_pos = next_tbl_pos
-                    break
-            
-            markers = find_table_continuation_markers(doc, tbl_pos, next_table_pos, t_idx)
-            
-            if not markers:
-                st.write(f"  🔴 **Нет «Продолжение таблицы {t_idx}» / «Окончание таблицы {t_idx}»**")
-                st.write(f"  💡 Если таблица на нескольких страницах, добавьте:")
-                st.write(f"     • «Продолжение таблицы {t_idx}» на следующей странице")
-                st.write(f"     • «Окончание таблицы {t_idx}» на последней странице")
-                tables_need_check += 1
-            else:
-                st.write(f"  ✅ Маркеры переноса найдены:")
-                for m_pos, m_text in markers:
-                    st.write(f"    • Строка {m_pos}: '{m_text}'")
-        else:
-            st.write(f"  ✅ Таблица маленькая, перенос маловероятен")
         
         # Показываем первые строки
         st.write(f"  📋 Первые 3 строки:")
@@ -208,21 +246,20 @@ def test_document(file):
     
     st.write("---")
     st.write("**Итог:**")
-    st.write(f"• Всего таблиц в документе: {len(all_tables)}")
-    st.write(f"• Вложенных (пропущено): {sum(1 for t in all_tables if t['depth'] > 0)}")
-    st.write(f"• Вне основного текста (пропущено): {sum(1 for t in all_tables if t['depth'] == 0 and not (start_body_pos < t['pos'] < end_body_pos))}")
-    st.write(f"• Проверено: {len(main_tables)}")
+    st.write(f"• Всего таблиц верхнего уровня: {len(all_main_tables)}")
+    st.write(f"• Пропущено (продолжения): {len(continuation_tables)}")
+    st.write(f"• Проверено основных таблиц: {len(main_tables)}")
     st.write(f"• Требуют проверки на перенос: {tables_need_check}")
 
 
 # Интерфейс
-st.set_page_config(page_title="Тест таблиц", layout="wide")
+st.set_page_config(page_title="Тест таблиц v2", layout="wide")
 st.title("📊 Тест проверки таблиц")
 st.write("Проверяет:")
-st.write("• Не вложена ли таблица в другую таблицу")
+st.write("• Исключает таблицы после «Продолжение таблицы» / «Окончание таблицы»")
 st.write("• Наличие подписи 'Таблица N – Название'")
 st.write("• Правильность тире и отсутствие точки в конце")
-st.write("• Наличие «Продолжение таблицы» / «Окончание таблицы»")
+st.write("• Наличие маркеров переноса")
 
 uploaded_file = st.file_uploader("Загрузите .docx", type=["docx"])
 
