@@ -87,7 +87,6 @@ def get_effective_left_indent(paragraph):
 def test_document(file):
     """Тестовая функция для проверки двух проблем"""
     doc = docx.Document(file)
-    results = []
     
     st.header("🔍 Анализ документа")
     
@@ -140,7 +139,7 @@ def test_document(file):
         if idx < start_idx:
             st.write(f"✅ Правильно проигнорирован: '{text}'")
     
-        # ============================================
+    # ============================================
     # ТЕСТ 2: Проверка списка источников
     # ============================================
     st.subheader("📚 Тест 2: Проверка списка источников")
@@ -179,7 +178,7 @@ def test_document(file):
     source_count = 0
     sources_with_issues = 0
     
-    for i in range(lit_start + 1, lit_end):  # ИСПРАВЛЕНО: используем lit_end
+    for i in range(lit_start + 1, lit_end):  # Используем lit_end вместо len(doc.paragraphs)
         source = doc.paragraphs[i]
         txt = source.text.strip()
         
@@ -254,3 +253,29 @@ def test_document(file):
         st.success("✅ Все источники оформлены правильно!")
     elif sources_with_issues > 0:
         st.error(f"❌ {sources_with_issues} источник(ов) требуют исправления")
+    
+    # Дополнительная отладка для первого источника
+    if source_count > 0:
+        st.subheader("🔧 Детальная отладка первого источника")
+        first_source = None
+        for i in range(lit_start + 1, lit_end):
+            if doc.paragraphs[i].text.strip() and not has_page_number(doc.paragraphs[i].text.strip()):
+                first_source = doc.paragraphs[i]
+                break
+        
+        if first_source:
+            st.write("XML элемента первого источника:")
+            st.code(first_source._element.xml[:1000])
+
+# Интерфейс
+st.set_page_config(page_title="Тест проверки документа", layout="wide")
+st.title("🧪 Тест проверки двух проблем")
+st.write("Этот скрипт проверяет только:")
+st.write("1. Правильно ли игнорируются пункты содержания (1., 2., если они не капсом)")
+st.write("2. Правильно ли проверяются отступы в списке источников (останавливается перед приложениями)")
+
+uploaded_file = st.file_uploader("Загрузите документ .docx для теста", type=["docx"])
+
+if uploaded_file is not None:
+    with st.spinner("Анализируем..."):
+        test_document(uploaded_file)
