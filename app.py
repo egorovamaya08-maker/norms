@@ -86,18 +86,28 @@ def get_effective_left_indent(paragraph):
 
 def is_all_caps(text):
     """Проверяет, написан ли текст заглавными буквами (с учетом кириллицы)"""
-    # Убираем цифры, пробелы, знаки препинания
     clean_text = re.sub(r'[\d\s\.,;:!?\-–—()«»""''\-\+]', '', text)
     if not clean_text:
         return False
-    # Проверяем, что все буквы заглавные
     return clean_text == clean_text.upper()
 
+def is_list_marker(text):
+    """Проверяет, является ли строка элементом списка с маркером"""
+    # Маркеры: 1) 2) а) б) - • ▪ ○ и т.д.
+    list_patterns = [
+        r'^\d+\)',           # 1) 2) 3)
+        r'^[а-яё]\)',        # а) б) в)
+        r'^[a-z]\)',         # a) b) c)
+        r'^[\-–—•▪○▸▹►▻◆◇]', # - – — • и другие маркеры
+        r'^\*\s',            # * с пробелом
+    ]
+    for pattern in list_patterns:
+        if re.match(pattern, text):
+            return True
+    return False
+
 def estimate_table_pages(table):
-    """
-    Оценивает, на сколько страниц может переноситься таблица.
-    Грубая оценка: ~40-50 строк на страницу
-    """
+    """Оценивает, на сколько страниц может переноситься таблица"""
     row_count = len(table.rows)
     if row_count <= 20:
         return 1
@@ -109,21 +119,73 @@ def estimate_table_pages(table):
         return 4
 
 def find_table_continuation_markers(doc, start_pos, end_pos, table_num):
-    """
-    Ищет маркеры продолжения/окончания таблицы между началом и концом
-    """
+    """Ищет маркеры продолжения/окончания таблицы"""
     markers_found = []
     for i in range(start_pos, min(end_pos + 1, len(doc.paragraphs))):
         para = doc.paragraphs[i]
         txt = para.text.strip()
         if txt:
-            # Ищем "Продолжение таблицы N" или "Окончание таблицы N"
             if re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + str(table_num), txt):
                 markers_found.append((i, txt[:100]))
     return markers_found
 
+def check_page_break_in_table(doc, table_element):
+    """
+    Проверяет, есть ли разрыв страницы внутри таблицы.
+    Ищет параграфы внутри таблицы с разрывом страницы.
+    """
+    try:
+        # Проходим по всем строкам и ячейкам таблицы
+        for row in table_element.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    # Проверяем наличие разрыва страницы в параграфе
+                    for run in para.runs:
+                        if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
+                            return True
+                    # Проверяем в свойствах параграфа
+                    pPr = para._element.find(qn('w:pPr'))
+                    if pPr is not None:
+                        for br in pPr.findall(qn('w:br')):
+                            if br.get(qn('w:type')) == 'page':
+                                return True
+    except:
+        pass
+    return False
+
+def table_spans_multiple_pages(doc, table, tbl_pos, next_table_pos):
+    """
+    Определяет, переносится ли таблица на несколько страниц.
+    Проверяет:
+    1. Наличие разрывов страниц внутри таблицы
+    2. Количество строк (косвенный признак)
+    3. Наличие текста с номерами страниц между частями таблицы
+    """
+    # Проверка 1: Прямые разрывы страниц
+    if check_page_break_in_table(doc, table):
+        return True
+    
+    # Проверка 2: Большое количество строк
+    if len(table.rows) > 25:
+        return True
+    
+    # Проверка 3: Ищем строки с номерами страниц между частями таблицы
+    # (характерно для таблиц, разорванных автоматически)
+    try:
+        for i in range(tbl_pos + 1, next_table_pos):
+            elem = doc.element.body[i]
+            if elem.tag.endswith('p'):
+                for para in doc.paragraphs:
+                    if para._element is elem and para.text.strip():
+                        if has_page_number(para.text.strip()):
+                            return True
+    except:
+        pass
+    
+    return False
+
 def test_document(file):
-    """Тестовая функция для проверки трёх проблем"""
+    """Тестовая функция для проверки проблем"""
     doc = docx.Document(file)
     
     st.header("🔍 Анализ документа")
@@ -160,7 +222,7 @@ def test_document(file):
     
     st.write(f"📌 Индекс начала основного текста: {start_idx}")
     
-    # Ищем все потенциальные заголовки разделов после start_idx
+    # Ищем все потенциальные заголовки разделов
     st.write("---")
     st.write("**Анализ заголовков в тексте:**")
     
@@ -177,7 +239,7 @@ def test_document(file):
         first_line = get_effective_first_line_indent(p)
         xml_info = get_paragraph_xml_info(p)
         
-        # Проверка 1: Заголовок с номером (1., 2., 3. и т.д.) - должен быть капсом
+        # Заголовок с номером (1., 2., 3. и т.д.) - должен быть капсом
         if re.match(r'^\d+\.\s+[А-ЯЁ]', txt):
             is_caps = is_all_caps(txt)
             
@@ -195,10 +257,9 @@ def test_document(file):
                 
                 section_headers.append(('numbered_caps', i, txt[:100], first_line))
         
-        # Проверка 2: Текст полностью капсом и длинный (может быть заголовок без номера)
+        # Текст полностью капсом и длинный (может быть заголовок без номера)
         elif is_all_caps(txt) and len(txt) > 25:
-            # Проверяем, не является ли это частью нумерованного списка
-            is_list_item = bool(re.match(r'^\d+\)', txt))
+            is_list_item = is_list_marker(txt)
             
             if not is_list_item:
                 st.write(f"**Строка {i}:** Возможный заголовок раздела (капсом, без номера)")
@@ -216,7 +277,6 @@ def test_document(file):
         
         st.write("---")
         
-        # Ограничим вывод
         if len(section_headers) >= 40:
             break
     
@@ -226,21 +286,15 @@ def test_document(file):
         st.error(f"❌ Найдено {issues_found} заголовков с ошибочным отступом")
     
     # ============================================
-    # ТЕСТ 2: Поиск нумерованных списков
+    # ТЕСТ 2: Проверка ВСЕХ видов списков
     # ============================================
-    st.subheader("📝 Тест 2: Проверка нумерованных списков")
-    st.write("Проверяем, что элементы списков УЖЕ имеют отступ 1.0 см (а не требуют его установки)")
-    
-    list_patterns = [
-        r'^\d+\)',      # 1) 2) 3)
-        r'^[а-яё]\)',   # а) б) в)
-        r'^[a-z]\)',    # a) b) c)
-        r'^[\-–—•]',    # - – — •
-    ]
+    st.subheader("📝 Тест 2: Проверка всех элементов списков")
+    st.write("Проверяем маркированные списки (•, -, *) и нумерованные (1), а), и т.д.)")
     
     list_items_found = 0
     list_items_correct = 0
     list_items_wrong = 0
+    list_types = {}
     
     for i in range(start_idx, len(doc.paragraphs)):
         p = doc.paragraphs[i]
@@ -250,32 +304,42 @@ def test_document(file):
             continue
         
         # Проверяем, является ли параграф элементом списка
-        is_list = False
-        for pattern in list_patterns:
-            if re.match(pattern, txt):
-                is_list = True
-                break
-        
-        if is_list:
+        if is_list_marker(txt):
             first_line = get_effective_first_line_indent(p)
             left_indent = get_effective_left_indent(p)
             xml_info = get_paragraph_xml_info(p)
             
             list_items_found += 1
             
-            # Показываем только первые 15 элементов списка для краткости
-            if list_items_found <= 15:
-                st.write(f"**Элемент списка {list_items_found} (строка {i}):** '{txt[:80]}...'")
+            # Определяем тип маркера
+            marker_type = "другой"
+            if re.match(r'^\d+\)', txt):
+                marker_type = "нумерованный 1)"
+            elif re.match(r'^[а-яё]\)', txt):
+                marker_type = "буквенный а)"
+            elif re.match(r'^[a-z]\)', txt):
+                marker_type = "буквенный a)"
+            elif re.match(r'^[\-–—]', txt):
+                marker_type = "тире"
+            elif re.match(r'^[•▪○▸▹►▻◆◇]', txt):
+                marker_type = "маркер •"
+            elif re.match(r'^\*\s', txt):
+                marker_type = "звездочка *"
+            
+            list_types[marker_type] = list_types.get(marker_type, 0) + 1
+            
+            # Показываем все элементы списка (или первые 25)
+            if list_items_found <= 25:
+                st.write(f"**Элемент списка {list_items_found} [{marker_type}] (строка {i}):** '{txt[:80]}...'")
                 st.write(f"  • Отступ слева: {left_indent:.3f} см")
                 st.write(f"  • Отступ первой строки: {first_line:.3f} см")
                 st.write(f"  • XML: {xml_info}")
                 
-                # Проверяем, есть ли уже отступ 1.0 см
                 if abs(first_line - 1.0) < 0.15:
-                    st.write(f"  ✅ Отступ 1.0 см уже установлен — всё правильно")
+                    st.write(f"  ✅ Отступ 1.0 см установлен — правильно")
                     list_items_correct += 1
                 elif abs(first_line) < 0.1:
-                    st.write(f"  ⚠️ Отступ отсутствует (0 см). Возможно, это особенность форматирования списка")
+                    st.write(f"  ⚠️ Отступ отсутствует (0 см) — нужно установить 1.0 см")
                     list_items_wrong += 1
                 else:
                     st.write(f"  ❌ Отступ {first_line:.1f} см — отличается от требуемого 1.0 см")
@@ -283,39 +347,41 @@ def test_document(file):
                 
                 st.write("---")
             else:
-                # Для остальных просто считаем
                 if abs(first_line - 1.0) < 0.15:
                     list_items_correct += 1
                 else:
                     list_items_wrong += 1
         
-        # Ограничим поиск
-        if list_items_found >= 50:
+        if list_items_found >= 100:
             break
     
     if list_items_found == 0:
-        st.write("ℹ️ Нумерованные списки не найдены")
+        st.write("ℹ️ Списки не найдены")
     else:
-        st.write(f"📊 Всего элементов списков: {list_items_found}")
+        st.write(f"📊 **Всего элементов списков: {list_items_found}**")
         st.write(f"  ✅ С правильным отступом (1.0 см): {list_items_correct}")
-        st.write(f"  ⚠️ С другим отступом: {list_items_wrong}")
+        st.write(f"  ❌ Требуют исправления: {list_items_wrong}")
+        
+        st.write(f"📊 **Типы найденных маркеров:**")
+        for marker_type, count in sorted(list_types.items()):
+            st.write(f"  • {marker_type}: {count} шт.")
         
         if list_items_wrong == 0:
             st.success("✅ Все элементы списков имеют правильный отступ 1.0 см")
+        else:
+            st.error(f"❌ {list_items_wrong} элементов списка требуют установки отступа 1.0 см")
     
     # ============================================
     # ТЕСТ 3: Анализ таблиц
     # ============================================
     st.subheader("📊 Тест 3: Анализ таблиц и переносов")
     
-    # Находим таблицы в основном тексте
     try:
         start_element = doc.paragraphs[start_idx]._element
         start_body_pos = list(doc.element.body).index(start_element)
     except:
         start_body_pos = 0
     
-    # Ищем конец основного текста (перед списком литературы)
     lit_start = None
     for i in range(start_idx, len(doc.paragraphs)):
         txt = doc.paragraphs[i].text.strip()
@@ -331,7 +397,6 @@ def test_document(file):
         except:
             pass
     
-    # Собираем все таблицы с их позициями
     main_tables = []
     for table in doc.tables:
         try:
@@ -345,13 +410,20 @@ def test_document(file):
     
     for t_idx, (tbl_pos, table) in enumerate(main_tables, start=1):
         st.write(f"---")
-        st.write(f"**Таблица {t_idx}** (позиция в документе: {tbl_pos})")
-        st.write(f"  Количество строк: {len(table.rows)}")
-        st.write(f"  Количество столбцов: {len(table.columns)}")
+        st.write(f"**Таблица {t_idx}** (позиция: {tbl_pos})")
+        st.write(f"  Строк: {len(table.rows)}, столбцов: {len(table.columns)}")
         
-        # Оцениваем количество страниц
-        estimated_pages = estimate_table_pages(table)
-        st.write(f"  📏 Оценочное количество страниц: {estimated_pages}")
+        # Определяем позицию следующей таблицы
+        next_table_pos = end_body_pos
+        for next_tbl_pos, _ in main_tables[t_idx:]:
+            if next_tbl_pos > tbl_pos:
+                next_table_pos = next_tbl_pos
+                break
+        
+        # Проверяем, переносится ли таблица на несколько страниц
+        spans_pages = table_spans_multiple_pages(doc, table, tbl_pos, next_table_pos)
+        
+        st.write(f"  📏 Перенос на несколько страниц: {'✅ Да' if spans_pages else '❌ Нет (или не обнаружено)'}")
         
         # Ищем подпись таблицы
         caption_para = None
@@ -371,55 +443,41 @@ def test_document(file):
             caption_text = caption_para.text.strip()
             st.write(f"  📝 Подпись: '{caption_text[:150]}'")
             
-            # Проверяем формат подписи
             if caption_text.startswith("Таблица"):
-                # Проверяем тире
                 if '—' in caption_text or '–' in caption_text:
                     st.write(f"  ✅ Используется тире")
                 elif '--' in caption_text:
-                    st.write(f"  ⚠️ Используется двойной дефис (--), рекомендуется заменить на тире (—)")
+                    st.write(f"  ⚠️ Используется двойной дефис (--), замените на тире (—)")
                 elif ' - ' in caption_text:
                     st.write(f"  ⚠️ Используется дефис вместо тире")
                 
-                # Проверяем точку в конце
                 if caption_text.rstrip().endswith("."):
-                    st.write(f"  ❌ Точка в конце подписи (нужно удалить)")
+                    st.write(f"  ❌ Точка в конце подписи (удалите)")
                 else:
                     st.write(f"  ✅ Нет точки в конце")
             else:
                 st.write(f"  ⚠️ Подпись не начинается с 'Таблица'")
         
-        # Проверка на перенос таблицы
-        if estimated_pages > 1:
-            st.write(f"  🔍 **Проверка на перенос таблицы:**")
+        # Проверка на перенос
+        if spans_pages:
+            st.write(f"  🔍 **Проверка маркеров переноса:**")
             
-            # Ищем следующую таблицу или конец текста
-            next_table_pos = end_body_pos
-            for next_tbl_pos, _ in main_tables[t_idx:]:
-                if next_tbl_pos > tbl_pos:
-                    next_table_pos = next_tbl_pos
-                    break
-            
-            # Ищем маркеры продолжения/окончания
             markers = find_table_continuation_markers(doc, tbl_pos, next_table_pos, t_idx)
             
             if markers:
-                st.write(f"  ✅ Найдены маркеры переноса:")
+                st.write(f"  ✅ Найдены маркеры:")
                 for marker_pos, marker_text in markers:
                     st.write(f"    • Строка {marker_pos}: '{marker_text}'")
             else:
-                st.write(f"  ❌ **Не найдены 'Продолжение таблицы {t_idx}' или 'Окончание таблицы {t_idx}'**")
-                st.write(f"  💡 Рекомендация: Таблица занимает примерно {estimated_pages} стр., нужно добавить:")
-                if estimated_pages == 2:
-                    st.write(f"     • 'Продолжение таблицы {t_idx}' на второй странице")
-                else:
-                    st.write(f"     • 'Продолжение таблицы {t_idx}' на страницах 2-{estimated_pages-1}")
-                    st.write(f"     • 'Окончание таблицы {t_idx}' на последней странице")
+                st.write(f"  ❌ **Маркеры переноса не найдены!**")
+                st.write(f"  💡 Необходимо добавить:")
+                st.write(f"     • На второй странице: 'Продолжение таблицы {t_idx}'")
+                st.write(f"     • На последней странице: 'Окончание таблицы {t_idx}'")
         else:
-            st.write(f"  ✅ Таблица небольшая, перенос не требуется")
+            st.write(f"  ✅ Таблица на одной странице, перенос не требуется")
         
-        # Показываем первые строки таблицы для наглядности
-        st.write(f"  📋 Первые 3 строки таблицы:")
+        # Показываем первые строки таблицы
+        st.write(f"  📋 Первые 3 строки:")
         for r_idx, row in enumerate(table.rows[:3]):
             cells_text = []
             for cell in row.cells:
@@ -430,19 +488,18 @@ def test_document(file):
     # ИТОГИ
     # ============================================
     st.header("📊 Итоги анализа")
-    st.write(f"• Найдено заголовков разделов: {len(section_headers)}")
-    st.write(f"• Найдено элементов списков: {list_items_found}")
-    st.write(f"• Найдено таблиц: {len(main_tables)}")
+    st.write(f"• Заголовков разделов: {len(section_headers)}")
+    st.write(f"• Элементов списков: {list_items_found} (правильных: {list_items_correct}, с ошибками: {list_items_wrong})")
+    st.write(f"• Таблиц: {len(main_tables)}")
     
-    # Статистика по таблицам
     tables_needing_continuation = 0
     for t_idx, (tbl_pos, table) in enumerate(main_tables, start=1):
-        if estimate_table_pages(table) > 1:
-            next_table_pos = end_body_pos
-            for next_tbl_pos, _ in main_tables[t_idx:]:
-                if next_tbl_pos > tbl_pos:
-                    next_table_pos = next_tbl_pos
-                    break
+        next_table_pos = end_body_pos
+        for next_tbl_pos, _ in main_tables[t_idx:]:
+            if next_tbl_pos > tbl_pos:
+                next_table_pos = next_tbl_pos
+                break
+        if table_spans_multiple_pages(doc, table, tbl_pos, next_table_pos):
             markers = find_table_continuation_markers(doc, tbl_pos, next_table_pos, t_idx)
             if not markers:
                 tables_needing_continuation += 1
@@ -451,12 +508,12 @@ def test_document(file):
         st.warning(f"⚠️ {tables_needing_continuation} таблиц(ы) требуют добавления 'Продолжение/Окончание таблицы'")
 
 # Интерфейс
-st.set_page_config(page_title="Тест проверки документа v3", layout="wide")
+st.set_page_config(page_title="Тест проверки документа v4", layout="wide")
 st.title("🧪 Тест проверки: заголовки, списки, таблицы")
 st.write("Проверяет:")
-st.write("1. **Заголовки разделов капсом** — не должны иметь абзацный отступ (должен быть 0 см)")
-st.write("2. **Нумерованные списки** — должны уже иметь отступ 1.0 см (проверяем, что он есть)")
-st.write("3. **Таблицы** — проверка подписей, тире, переносов на несколько страниц")
+st.write("1. **Заголовки разделов капсом** — не должны иметь абзацный отступ")
+st.write("2. **Все виды списков** (•, -, 1), а)) — должны иметь отступ 1.0 см")
+st.write("3. **Таблицы** — проверка переносов, подписей и маркеров Продолжение/Окончание")
 
 uploaded_file = st.file_uploader("Загрузите документ .docx для теста", type=["docx"])
 
