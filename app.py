@@ -140,7 +140,7 @@ def test_document(file):
         if idx < start_idx:
             st.write(f"✅ Правильно проигнорирован: '{text}'")
     
-    # ============================================
+        # ============================================
     # ТЕСТ 2: Проверка списка источников
     # ============================================
     st.subheader("📚 Тест 2: Проверка списка источников")
@@ -158,6 +158,20 @@ def test_document(file):
         st.warning("⚠️ Список источников не найден")
         return
     
+    # Ищем конец списка источников (начало приложений)
+    lit_end = len(doc.paragraphs)  # По умолчанию - до конца документа
+    appendix_keywords = ["ПРИЛОЖЕНИЕ", "ПРИЛОЖЕНИЯ", "APPENDIX"]
+    
+    for i in range(lit_start + 1, len(doc.paragraphs)):
+        txt = doc.paragraphs[i].text.strip().upper()
+        # Ищем заголовок приложения
+        if any(txt.startswith(kw) for kw in appendix_keywords):
+            lit_end = i
+            st.write(f"🛑 Найден конец списка источников на строке {i}: '{doc.paragraphs[i].text.strip()[:80]}'")
+            break
+    
+    st.write(f"📌 Проверяем источники со строки {lit_start + 1} до строки {lit_end - 1}")
+    
     # Анализируем каждый источник
     st.write("---")
     st.write("**Анализ каждого источника:**")
@@ -165,7 +179,7 @@ def test_document(file):
     source_count = 0
     sources_with_issues = 0
     
-    for i in range(lit_start + 1, len(doc.paragraphs)):
+    for i in range(lit_start + 1, lit_end):  # ИСПРАВЛЕНО: используем lit_end
         source = doc.paragraphs[i]
         txt = source.text.strip()
         
@@ -173,6 +187,11 @@ def test_document(file):
             continue
         
         if has_page_number(txt):
+            continue
+        
+        # Дополнительная проверка: если строка начинается с ключевых слов приложений - пропускаем
+        if any(txt.upper().startswith(kw) for kw in appendix_keywords):
+            st.write(f"⚠️ Пропущен заголовок приложения: '{txt[:80]}'")
             continue
         
         source_count += 1
@@ -217,6 +236,14 @@ def test_document(file):
         
         st.write("---")
     
+    # Показываем, что после списка источников
+    if lit_end < len(doc.paragraphs):
+        st.write("📄 **Содержимое после списка источников (пропущено при проверке):**")
+        for i in range(lit_end, min(lit_end + 5, len(doc.paragraphs))):
+            txt = doc.paragraphs[i].text.strip()
+            if txt:
+                st.write(f"  Строка {i}: '{txt[:80]}...'")
+    
     # Итоги
     st.subheader("📊 Итоги проверки")
     st.write(f"• Пунктов содержания проигнорировано: {len(toc_items)}")
@@ -227,29 +254,3 @@ def test_document(file):
         st.success("✅ Все источники оформлены правильно!")
     elif sources_with_issues > 0:
         st.error(f"❌ {sources_with_issues} источник(ов) требуют исправления")
-    
-    # Дополнительная отладка для первого источника
-    if source_count > 0:
-        st.subheader("🔧 Детальная отладка первого источника")
-        first_source = None
-        for i in range(lit_start + 1, len(doc.paragraphs)):
-            if doc.paragraphs[i].text.strip() and not has_page_number(doc.paragraphs[i].text.strip()):
-                first_source = doc.paragraphs[i]
-                break
-        
-        if first_source:
-            st.write("XML элемента первого источника:")
-            st.code(first_source._element.xml[:1000])
-
-# Интерфейс
-st.set_page_config(page_title="Тест проверки документа", layout="wide")
-st.title("🧪 Тест проверки двух проблем")
-st.write("Этот скрипт проверяет только:")
-st.write("1. Правильно ли игнорируются пункты содержания (1., 2., если они не капсом)")
-st.write("2. Правильно ли проверяются отступы в списке источников")
-
-uploaded_file = st.file_uploader("Загрузите документ .docx для теста", type=["docx"])
-
-if uploaded_file is not None:
-    with st.spinner("Анализируем..."):
-        test_document(uploaded_file)
