@@ -58,8 +58,8 @@ def check_word_document(file):
             start_idx = i
             break
         
-        # Только заголовки с номером: "1. НАЗВАНИЕ", "2. НАЗВАНИЕ"
-        if re.match(r'^\d+\.\s+[А-Я]', txt):
+        # Только заголовки глав: "1. НАЗВАНИЕ" (номер, точка, пробел, минимум 2 заглавные буквы)
+        if re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', txt):
             start_idx = i
             break
     
@@ -76,7 +76,6 @@ def check_word_document(file):
     # ---------- 4. ПРОВЕРКА ОСНОВНОГО ТЕКСТА (до списка источников) ----------
     figure_counter = 0
     prev_para_empty = False
-    subsection_re = re.compile(r'^\d+\.\d+')
     
     # Конец проверки — либо список источников, либо конец документа
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
@@ -92,13 +91,21 @@ def check_word_document(file):
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
         
-        # Определяем тип абзаца
-        is_level1 = (text.upper() in level1_keywords or
-                     bool(re.match(r'^\d+\.\s+[А-Я]', text)))
-        
-        is_subsection = bool(subsection_re.match(text)) and not is_level1
+        # Определяем тип абзаца СТРОГО по шаблонам
+        is_level1 = False
+        is_subsection = False
         is_figure = text.startswith("Рисунок")
         is_table_caption = text.startswith("Таблица")
+        
+        # Раздел первого уровня: "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"
+        if text.upper() in level1_keywords:
+            is_level1 = True
+        # Раздел первого уровня: "1. НАЗВАНИЕ ГЛАВЫ" (номер, точка, пробел, 2+ заглавные буквы)
+        elif re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', text):
+            is_level1 = True
+        # Подраздел: "1.1. Название" или "1.1.1. Название"
+        elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
+            is_subsection = True
 
         # --- Заголовок раздела ---
         if is_level1:
@@ -176,7 +183,7 @@ def check_word_document(file):
         elif is_table_caption:
             pass
         
-        # --- Обычный текст ---
+        # --- Обычный текст (все остальные строки) ---
         else:
             # Отступ 1 см
             if not pf.first_line_indent:
@@ -196,7 +203,6 @@ def check_word_document(file):
     except:
         start_body_pos = 0
 
-    # Находим позицию последнего элемента до списка источников
     end_body_pos = len(doc.element.body)
     if lit_start is not None:
         try:
@@ -290,7 +296,6 @@ def check_word_document(file):
 
     # ---------- 6. СПИСОК ИСТОЧНИКОВ ----------
     if lit_start is not None:
-        # Проверяем все источники
         sources_with_issues = 0
         
         for i in range(lit_start + 1, len(doc.paragraphs)):
