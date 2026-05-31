@@ -45,8 +45,6 @@ def check_word_document(file):
         issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
 
     # ---------- 2. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
-    # Ищем ТОЛЬКО явные заголовки разделов: "ВВЕДЕНИЕ" или "1. НАЗВАНИЕ"
-    # Прописные строки по центру НЕ считаем заголовками разделов — они могут быть титульными
     start_idx = None
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
     
@@ -68,12 +66,22 @@ def check_word_document(file):
     if start_idx is None:
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
 
-    # ---------- 3. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
+    # ---------- 3. ИЩЕМ НАЧАЛО СПИСКА ИСТОЧНИКОВ ----------
+    lit_start = None
+    for i in range(start_idx, len(doc.paragraphs)):
+        if doc.paragraphs[i].text.strip().upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
+            lit_start = i
+            break
+
+    # ---------- 4. ПРОВЕРКА ОСНОВНОГО ТЕКСТА (до списка источников) ----------
     figure_counter = 0
     prev_para_empty = False
     subsection_re = re.compile(r'^\d+\.\d+')
+    
+    # Конец проверки — либо список источников, либо конец документа
+    end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
 
-    for idx in range(start_idx, len(doc.paragraphs)):
+    for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
         
@@ -129,7 +137,6 @@ def check_word_document(file):
         
         # --- Подраздел ---
         elif is_subsection:
-            # Извлекаем название (всё после номера)
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
             # Отступ 1 см
             if not pf.first_line_indent:
@@ -182,17 +189,27 @@ def check_word_document(file):
         
         prev_para_empty = False
 
-    # ---------- 4. ТАБЛИЦЫ В ОСНОВНОМ ТЕКСТЕ ----------
+    # ---------- 5. ТАБЛИЦЫ В ОСНОВНОМ ТЕКСТЕ (до списка источников) ----------
     try:
         start_element = doc.paragraphs[start_idx]._element
         start_body_pos = list(doc.element.body).index(start_element)
     except:
         start_body_pos = 0
 
+    # Находим позицию последнего элемента до списка источников
+    end_body_pos = len(doc.element.body)
+    if lit_start is not None:
+        try:
+            lit_element = doc.paragraphs[lit_start]._element
+            end_body_pos = list(doc.element.body).index(lit_element)
+        except:
+            pass
+
     main_tables = []
     for table in doc.tables:
         try:
-            if list(doc.element.body).index(table._element) > start_body_pos:
+            tbl_pos = list(doc.element.body).index(table._element)
+            if start_body_pos < tbl_pos < end_body_pos:
                 main_tables.append(table)
         except:
             pass
@@ -202,7 +219,7 @@ def check_word_document(file):
         
         # Ищем подпись таблицы
         caption_para = None
-        for i in range(tbl_pos - 1, -1, -1):
+        for i in range(tbl_pos - 1, start_body_pos - 1, -1):
             elem = doc.element.body[i]
             if elem.tag.endswith('p'):
                 for para in doc.paragraphs:
@@ -240,7 +257,7 @@ def check_word_document(file):
             
             # Пустая строка после таблицы
             next_para = None
-            for i in range(tbl_pos + 1, len(doc.element.body)):
+            for i in range(tbl_pos + 1, end_body_pos):
                 elem = doc.element.body[i]
                 if elem.tag.endswith('p'):
                     for para in doc.paragraphs:
@@ -271,16 +288,9 @@ def check_word_document(file):
         if bold_in_table:
             issues.append(f"Таблица {t_idx} – уберите полужирное начертание внутри таблицы")
 
-    # ---------- 5. СПИСОК ИСТОЧНИКОВ ----------
-    lit_start = None
-    for i in range(start_idx, len(doc.paragraphs)):
-        if doc.paragraphs[i].text.strip().upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
-            lit_start = i
-            break
-    
+    # ---------- 6. СПИСОК ИСТОЧНИКОВ ----------
     if lit_start is not None:
-        # Проверяем ВСЕ источники и собираем проблемы
-        lit_issues = []
+        # Проверяем все источники
         sources_with_issues = 0
         
         for i in range(lit_start + 1, len(doc.paragraphs)):
@@ -315,9 +325,9 @@ def check_word_document(file):
         
         if sources_with_issues > 0:
             issues.append(
-                f"Список источников – проверьте оформление: "
-                f"отступ слева 0 см, отступ первой строки 1,0 см, "
-                f"междустрочный интервал 1,2 (множитель), выравнивание по ширине"
+                "Список источников – проверьте оформление: "
+                "отступ слева 0 см, отступ первой строки 1,0 см, "
+                "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
             )
 
     # ---------- ИТОГ ----------
