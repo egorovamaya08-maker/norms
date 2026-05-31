@@ -8,10 +8,12 @@ import re
 def get_header_footer_info(section, header_type='default', location='header'):
     """
     Получает информацию из колонтитула.
-    location: 'header' или 'footer'
     """
     info = {
         'has_page_number': False,
+        'is_auto_numbering': False,  # True если это поле PAGE (автонумерация)
+        'is_static_number': False,   # True если это просто текст с цифрой
+        'static_number_value': None, # Значение статичного номера
         'page_number_text': '',
         'font_size': None,
         'alignment': None,
@@ -55,52 +57,40 @@ def get_header_footer_info(section, header_type='default', location='header'):
             text = para.text.strip()
             info['all_text'] += text + ' '
             
-            # Проверяем каждый run
-            for run in para.runs:
-                run_xml = run._element.xml
-                
-                # Способ 1: w:fldChar (символы поля)
-                if 'w:fldChar' in run_xml:
-                    info['has_page_number'] = True
-                    info['page_number_text'] = run.text if run.text else '[поле]'
-                    
-                    if run.font.size:
-                        info['font_size'] = run.font.size.pt
-                    
-                    if para.alignment is not None:
-                        info['alignment'] = para.alignment
-                
-                # Способ 2: w:instrText с PAGE
-                if 'w:instrText' in run_xml and 'PAGE' in run.text:
-                    info['has_page_number'] = True
-                    info['page_number_text'] = run.text
-                    
-                    if run.font.size and not info['font_size']:
-                        info['font_size'] = run.font.size.pt
+            # Проверяем, есть ли в XML поле PAGE
+            para_xml = etree.tostring(para._element, encoding='unicode')
+            has_page_field = 'PAGE' in para_xml and ('w:fldChar' in para_xml or 'w:instrText' in para_xml)
             
-            # Получаем размер шрифта, если ещё нет
-            if not info['font_size']:
-                for run in para.runs:
-                    if run.font.size:
-                        info['font_size'] = run.font.size.pt
-                        break
-                
-                if not info['font_size']:
-                    try:
-                        if para.style and para.style.font.size:
-                            info['font_size'] = para.style.font.size.pt
-                    except:
-                        pass
-            
-            # Выравнивание
-            if info['alignment'] is None and para.alignment is not None:
-                info['alignment'] = para.alignment
-        
-        # Проверяем XML на PAGE, если не нашли через runs
-        if not info['has_page_number']:
-            if 'PAGE' in info['xml_info']:
+            if has_page_field:
+                # Это правильная автонумерация через поле PAGE
                 info['has_page_number'] = True
-                info['page_number_text'] = '[найдено в XML]'
+                info['is_auto_numbering'] = True
+                info['page_number_text'] = '[автонумерация PAGE]'
+            elif text and re.match(r'^\d+$', text):
+                # Это просто текст с цифрой (статичный номер)
+                info['has_page_number'] = True
+                info['is_static_number'] = True
+                info['static_number_value'] = int(text)
+                info['page_number_text'] = f'статичный номер: {text}'
+            elif text:
+                # Любой другой текст в колонтитуле
+                info['page_number_text'] = text
+            
+            # Получаем размер шрифта
+            for run in para.runs:
+                if run.font.size and not info['font_size']:
+                    info['font_size'] = run.font.size.pt
+                
+                # Выравнивание
+                if info['alignment'] is None and para.alignment is not None:
+                    info['alignment'] = para.alignment
+            
+            if not info['font_size']:
+                try:
+                    if para.style and para.style.font.size:
+                        info['font_size'] = para.style.font.size.pt
+                except:
+                    pass
     
     except Exception as e:
         info['xml_info'] = f'Ошибка: {str(e)[:200]}'
@@ -108,89 +98,75 @@ def get_header_footer_info(section, header_type='default', location='header'):
     return info
 
 def analyze_page_numbering(doc):
-    """Анализирует нумерацию страниц в колонтитулах"""
+    """Анализирует нумерацию страниц"""
     results = {
         'sections': [],
         'issues': [],
-        'has_numbering_in_header': False,
-        'has_numbering_in_footer': False
+        'has_auto_numbering': False,
+        'has_static_numbering': False,
+        'static_numbers': []
     }
     
     for i, section in enumerate(doc.sections, 1):
-        # Проверяем хедеры
-        header_default = get_header_footer_info(section, 'default', 'header')
         footer_default = get_header_footer_info(section, 'default', 'footer')
-        
-        header_first = get_header_footer_info(section, 'first', 'header') if section.different_first_page_header_footer else None
-        footer_first = get_header_footer_info(section, 'first', 'footer') if section.different_first_page_header_footer else None
-        
-        if header_default['has_page_number']:
-            results['has_numbering_in_header'] = True
-        if footer_default['has_page_number']:
-            results['has_numbering_in_footer'] = True
+        header_default = get_header_footer_info(section, 'default', 'header')
         
         section_data = {
             'section_num': i,
             'different_first_page': section.different_first_page_header_footer,
             'header': header_default,
             'footer': footer_default,
-            'header_first': header_first,
-            'footer_first': footer_first,
         }
         
         results['sections'].append(section_data)
         
-        # Определяем, где находится нумерация
-        numbering_container = None
-        if header_default['has_page_number']:
-            numbering_container = header_default
-            location_text = 'верхнем колонтитуле'
-        elif footer_default['has_page_number']:
-            numbering_container = footer_default
-            location_text = 'нижнем колонтитуле'
-        
-        if numbering_container:
-            # Проверяем размер шрифта
-            if numbering_container['font_size']:
-                if abs(numbering_container['font_size'] - 14) > 0.5:
+        # Проверяем, где есть нумерация
+        for container, location in [(footer_default, 'нижнем'), (header_default, 'верхнем')]:
+            if container['has_page_number']:
+                if container['is_auto_numbering']:
+                    results['has_auto_numbering'] = True
+                    
+                    # Проверяем размер шрифта
+                    if container['font_size'] and abs(container['font_size'] - 14) > 0.5:
+                        results['issues'].append({
+                            'section': i,
+                            'type': 'font_size',
+                            'message': f"Секция {i}: размер шрифта {container['font_size']} pt в {location} колонтитуле (должен быть 14 pt)"
+                        })
+                    
+                    # Проверяем выравнивание
+                    if container['alignment'] is not None and container['alignment'] != WD_ALIGN_PARAGRAPH.CENTER:
+                        align_names = {0: 'по левому краю', 1: 'по центру', 2: 'по правому краю', 3: 'по ширине'}
+                        results['issues'].append({
+                            'section': i,
+                            'type': 'alignment',
+                            'message': f"Секция {i}: выравнивание {align_names.get(container['alignment'], 'неизвестно')} в {location} колонтитуле (должно быть по центру)"
+                        })
+                
+                elif container['is_static_number']:
+                    results['has_static_numbering'] = True
+                    results['static_numbers'].append({
+                        'section': i,
+                        'value': container['static_number_value'],
+                        'location': location
+                    })
+                    
+                    # Это ошибка - должно быть поле PAGE
                     results['issues'].append({
                         'section': i,
-                        'type': 'font_size',
-                        'message': f"Секция {i}: размер шрифта {numbering_container['font_size']} pt в {location_text} (должен быть 14 pt)",
+                        'type': 'static_number',
+                        'message': f"Секция {i}: в {location} колонтитуле статичный номер '{container['static_number_value']}' вместо автонумерации (нужно вставить поле PAGE)"
                     })
-            
-            # Проверяем выравнивание
-            if numbering_container['alignment'] is not None:
-                if numbering_container['alignment'] != WD_ALIGN_PARAGRAPH.CENTER:
-                    align_names = {0: 'по левому краю', 1: 'по центру', 2: 'по правому краю', 3: 'по ширине'}
-                    results['issues'].append({
-                        'section': i,
-                        'type': 'alignment',
-                        'message': f"Секция {i}: выравнивание {align_names.get(numbering_container['alignment'], 'неизвестно')} в {location_text} (должно быть по центру)",
-                    })
-        else:
+    
+    # Проверяем, одинаковые ли статичные номера
+    if len(results['static_numbers']) > 1:
+        values = [n['value'] for n in results['static_numbers']]
+        if len(set(values)) == 1:
             results['issues'].append({
-                'section': i,
-                'type': 'no_numbering',
-                'message': f"Секция {i}: нумерация не найдена ни в верхнем, ни в нижнем колонтитуле",
+                'section': 0,
+                'type': 'same_static_number',
+                'message': f"⚠️ Во всех секциях одинаковый статичный номер '{values[0]}' — нужно заменить на поле PAGE (автонумерацию)"
             })
-        
-        # Проверяем первую страницу
-        first_page_container = None
-        if section.different_first_page_header_footer:
-            if header_first and header_first['has_page_number']:
-                first_page_container = header_first
-                location_text = 'верхнем колонтитуле первой страницы'
-            elif footer_first and footer_first['has_page_number']:
-                first_page_container = footer_first
-                location_text = 'нижнем колонтитуле первой страницы'
-            
-            if first_page_container:
-                results['issues'].append({
-                    'section': i,
-                    'type': 'first_page_number',
-                    'message': f"Секция {i}: есть номер в {location_text} (должна быть пустой)",
-                })
     
     # Начальный номер
     try:
@@ -212,10 +188,10 @@ def test_document(file):
     
     st.header("📄 Проверка нумерации страниц")
     st.write("**Требования:**")
+    st.write("• Автоматическая нумерация (поле PAGE)")
     st.write("• Размер шрифта: 14 pt")
     st.write("• Выравнивание: по центру")
-    st.write("• Нумерация в нижнем или верхнем колонтитуле")
-    st.write("• Первая страница секции — без номера (если разные колонтитулы)")
+    st.write("• Нумерация сквозная, начинается с титульного листа")
     
     st.write("---")
     
@@ -223,8 +199,8 @@ def test_document(file):
     
     # Общая информация
     st.subheader(f"📊 Секций: {len(results['sections'])}")
-    st.write(f"Нумерация в верхнем колонтитуле: {'✅ Да' if results['has_numbering_in_header'] else '❌ Нет'}")
-    st.write(f"Нумерация в нижнем колонтитуле: {'✅ Да' if results['has_numbering_in_footer'] else '❌ Нет'}")
+    st.write(f"Автонумерация (поле PAGE): {'✅ Есть' if results['has_auto_numbering'] else '❌ Нет'}")
+    st.write(f"Статичные номера (просто цифры): {'⚠️ Есть' if results['has_static_numbering'] else '✅ Нет'}")
     
     st.write("---")
     
@@ -236,46 +212,32 @@ def test_document(file):
         
         st.write(f"**Секция {sec_num}:**")
         
-        # Верхний колонтитул
-        st.write(f"  🔼 Верхний колонтитул:")
-        st.write(f"    Нумерация: {'✅ Есть' if header['has_page_number'] else '❌ Нет'}")
-        st.write(f"    Текст: '{header['all_text'].strip()[:80]}'")
-        st.write(f"    Параграфов: {header['paragraphs_count']}")
-        
         # Нижний колонтитул
         st.write(f"  🔽 Нижний колонтитул:")
-        st.write(f"    Нумерация: {'✅ Есть' if footer['has_page_number'] else '❌ Нет'}")
-        st.write(f"    Текст: '{footer['all_text'].strip()[:80]}'")
-        st.write(f"    Параграфов: {footer['paragraphs_count']}")
-        
-        # Определяем, где номер
-        if header['has_page_number'] or footer['has_page_number']:
-            container = header if header['has_page_number'] else footer
-            location = 'верхнем' if header['has_page_number'] else 'нижнем'
+        if footer['has_page_number']:
+            if footer['is_auto_numbering']:
+                st.write(f"    ✅ Автонумерация (поле PAGE)")
+            elif footer['is_static_number']:
+                st.write(f"    ❌ Статичный номер: **{footer['static_number_value']}** (должно быть поле PAGE)")
+            st.write(f"    Текст: '{footer['all_text'].strip()}'")
             
-            st.write(f"  ✅ Номер найден в **{location}** колонтитуле")
+            if footer['font_size']:
+                font_ok = abs(footer['font_size'] - 14) < 0.5
+                st.write(f"    Размер шрифта: {footer['font_size']} pt {'✅' if font_ok else '❌ (14 pt)'}")
             
-            if container['font_size']:
-                font_ok = abs(container['font_size'] - 14) < 0.5
-                st.write(f"  Размер шрифта: {container['font_size']} pt {'✅' if font_ok else '❌ (14 pt)'}")
-            
-            if container['alignment'] is not None:
+            if footer['alignment'] is not None:
                 align_names = {0: 'LEFT', 1: 'CENTER', 2: 'RIGHT', 3: 'JUSTIFY'}
-                align_ok = container['alignment'] == 1
-                st.write(f"  Выравнивание: {align_names.get(container['alignment'], '?')} {'✅' if align_ok else '❌ (CENTER)'}")
+                align_ok = footer['alignment'] == 1
+                st.write(f"    Выравнивание: {align_names.get(footer['alignment'], '?')} {'✅' if align_ok else '❌ (CENTER)'}")
+        else:
+            st.write(f"    ❌ Нет нумерации")
         
-        # Первая страница
-        if section_data['different_first_page']:
-            first_has_number = False
-            if section_data['header_first'] and section_data['header_first']['has_page_number']:
-                first_has_number = True
-            if section_data['footer_first'] and section_data['footer_first']['has_page_number']:
-                first_has_number = True
-            
-            if first_has_number:
-                st.write(f"  ❌ Первая страница: есть номер")
-            else:
-                st.write(f"  ✅ Первая страница: без номера")
+        # Верхний колонтитул
+        st.write(f"  🔼 Верхний колонтитул:")
+        if header['has_page_number']:
+            st.write(f"    Текст: '{header['all_text'].strip()}'")
+        else:
+            st.write(f"    Пустой")
         
         st.write("---")
     
@@ -285,7 +247,17 @@ def test_document(file):
     if real_issues:
         st.subheader("❌ Найденные проблемы:")
         for issue in real_issues:
-            st.write(f"• {issue['message']}")
+            icon = "•"
+            if issue['type'] == 'static_number':
+                icon = "🔴"
+            elif issue['type'] == 'same_static_number':
+                icon = "⚠️"
+            st.write(f"{icon} {issue['message']}")
+        
+        # Рекомендация
+        if results['has_static_numbering']:
+            st.write("---")
+            st.info("💡 **Как исправить:** В Word удалите статичную цифру и вставьте автонумерацию: Вставка → Номер страницы")
     else:
         st.success("✅ Нумерация страниц настроена правильно")
     
@@ -296,23 +268,21 @@ def test_document(file):
         if results['start_page'] == 5:
             st.write("✅ Правильно (4 страницы до введения)")
         elif results['start_page'] == 1:
-            st.write("⚠️ Начинается с 1 (должно быть 5, если 4 страницы до введения)")
+            st.write("⚠️ Начинается с 1 (должно быть 5)")
     else:
-        st.write("⚠️ Не определен")
+        st.write("⚠️ Не определён")
     
     # Отладка
     with st.expander("🔧 Отладка: XML колонтитулов"):
         for i, section_data in enumerate(results['sections'], 1):
-            st.write(f"**Секция {i} - Верхний колонтитул:**")
-            st.code(section_data['header']['xml_info'][:1000], language='xml')
             st.write(f"**Секция {i} - Нижний колонтитул:**")
-            st.code(section_data['footer']['xml_info'][:1000], language='xml')
+            st.code(section_data['footer']['xml_info'][:1500], language='xml')
 
 
 # Интерфейс
 st.set_page_config(page_title="Проверка нумерации", layout="wide")
 st.title("📄 Проверка нумерации страниц")
-st.write("Анализ верхних и нижних колонтитулов")
+st.write("Анализ колонтитулов: автонумерация vs статичные номера")
 
 uploaded_file = st.file_uploader("Загрузите .docx", type=["docx"])
 
