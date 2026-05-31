@@ -7,230 +7,276 @@ import re
 def check_word_document(file):
     doc = docx.Document(file)
     issues = []
-
-    # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
-    def is_empty_paragraph(p):
-        return not p.text.strip()
-
-    def is_bold_paragraph(p):
+    
+    # --------------------------------------------------
+    # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+    # --------------------------------------------------
+    def is_empty(p):
+        return len(p.text.strip()) == 0
+    
+    def is_bold(p):
+        # Проверяем стиль, затем прямое форматирование ранов
+        if p.style and p.style.font and p.style.font.bold:
+            return True
         runs = [r for r in p.runs if r.text.strip()]
         if not runs:
             return False
-        return all(r.bold for r in runs)
+        return all(r.bold is True for r in runs)
+    
+    def get_indent_cm(pf):
+        """Безопасное получение отступа в см"""
+        if pf.first_line_indent is None:
+            return 0.0
+        return pf.first_line_indent.cm
 
-    def get_text_clean(p):
-        return p.text.strip()
-
-    # ====================== ОПРЕДЕЛЕНИЕ ГРАНИЦ ======================
-    content_start = None
-    content_end = None
-    intro_start = None
-    lit_start = None
-
+    # --------------------------------------------------
+    # ОПРЕДЕЛЕНИЕ ГРАНИЦ ЗОН ДОКУМЕНТА
+    # --------------------------------------------------
+    toc_start = None
+    toc_end = None
+    ref_start = None
+    
     for i, p in enumerate(doc.paragraphs):
-        txt = p.text.strip().upper()
-        if txt == "СОДЕРЖАНИЕ" and content_start is None:
-            content_start = i
-        elif txt == "ВВЕДЕНИЕ" and intro_start is None:
-            intro_start = i
-            if content_start is not None and content_end is None:
-                content_end = i - 1
-        elif txt == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
-            lit_start = i
+        txt = p.text.strip()
+        if txt.upper() == "СОДЕРЖАНИЕ":
+            toc_start = i
+        elif toc_start is not None and toc_end is None:
+            # Ищем начало основного текста
+            if txt.upper() in ("ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ") or \
+               re.match(r'^\d+\.\s+[А-ЯЁ]', txt):
+                toc_end = i - 1
+        if txt.upper().startswith("СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"):
+            ref_start = i
+
+    # Фоллбэки для границ
+    if toc_start is not None and toc_end is None:
+        toc_end = toc_start
+    main_text_start = (toc_end + 1) if toc_end is not None else 0
+    if ref_start is None:
+        ref_start = len(doc.paragraphs)
+
+    # --------------------------------------------------
+    # ПОЛЯ СТРАНИЦ (глобальная проверка)
+    # --------------------------------------------------
+    margins_ok = True
+    for sec in doc.sections:
+        # Используем .cm напрямую, без ручных переводов
+        if (abs(sec.left_margin.cm - 2.0) > 0.1 or abs(sec.right_margin.cm - 2.0) > 0.1 or
+            abs(sec.top_margin.cm - 2.0) > 0.1 or abs(sec.bottom_margin.cm - 2.0) > 0.1):
+            margins_ok = False
             break
+    if not margins_ok:
+        issues.append("Поля страниц – установите 20 мм со всех сторон")
 
-    if content_start is None:
-        issues.append("Не найдено заголовка 'СОДЕРЖАНИЕ'")
-    if intro_start is None:
-        issues.append("Не найдено заголовка 'ВВЕДЕНИЕ'")
-
-    # ====================== ПОЛЯ СТРАНИЦ ======================
-    for section in doc.sections:
-        left_mm = section.left_margin.pt * 25.4 / 72
-        right_mm = section.right_margin.pt * 25.4 / 72
-        top_mm = section.top_margin.pt * 25.4 / 72
-        bottom_mm = section.bottom_margin.pt * 25.4 / 72
-
-        if any(abs(x - 20) > 0.6 for x in (left_mm, right_mm, top_mm, bottom_mm)):
-            issues.append("Поля страниц – установите все поля по 20 мм (±0.5 мм)")
-            break
-
-    # ====================== ОСНОВНОЙ ПРОХОД ======================
-    figure_counter = 0
-    prev_was_empty = False
-    in_main_text = False
-
+    # --------------------------------------------------
+    # ОСНОВНОЙ ПРОХОД ПО АБЗАЦАМ
+    # --------------------------------------------------
+    fig_counter = 0
+    ref_checked = False
+    
     for idx, p in enumerate(doc.paragraphs):
-        text = get_text_clean(p)
-        if not text:
-            prev_was_empty = True
+        txt = p.text.strip()
+        if is_empty(p):
             continue
-
-        # Пропускаем титульную часть и содержание
-        if content_start is not None and idx <= content_end:
-            if idx == content_start:  # только проверяем сам заголовок "СОДЕРЖАНИЕ"
-                if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                    issues.append("СОДЕРЖАНИЕ – выровняйте по центру")
-                if not is_bold_paragraph(p):
-                    issues.append("СОДЕРЖАНИЕ – сделайте полужирным")
-                if text.endswith("."):
-                    issues.append("СОДЕРЖАНИЕ – удалите точку в конце")
+            
+        # Пропускаем титульные листы и содержание
+        if idx < main_text_start:
             continue
-
-        # Начало основного текста
-        if idx >= intro_start:
-            in_main_text = True
-
+            
         pf = p.paragraph_format
 
-        # ---------- ЗАГОЛОВКИ РАЗДЕЛОВ (уровень 1) ----------
-        if text == "ВВЕДЕНИЕ" or text == "ЗАКЛЮЧЕНИЕ" or re.match(r'^\d+\.\s', text):
-            title_short = text[:50]
-
-            if text != "ВВЕДЕНИЕ":
-                # Проверка новой страницы (упрощённо)
-                if idx > 0 and not is_empty_paragraph(doc.paragraphs[idx-1]):
-                    issues.append(f"«{title_short}…» – раздел должен начинаться с новой страницы")
-
-            if pf.first_line_indent and abs(pf.first_line_indent.cm) > 0.1:
-                issues.append(f"«{title_short}…» – уберите абзацный отступ")
-
-            if not is_bold_paragraph(p):
-                issues.append(f"«{title_short}…» – заголовок должен быть полужирным")
-
-            if text != text.upper():
-                issues.append(f"«{title_short}…» – заголовок должен быть ПРОПИСНЫМИ буквами")
-
+        # ---------- ЗАГОЛОВОК СОДЕРЖАНИЯ ----------
+        if txt.upper() == "СОДЕРЖАНИЕ":
             if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"«{title_short}…» – выровняйте заголовок по центру")
-
-            if text.endswith("."):
-                issues.append(f"«{title_short}…» – удалите точку в конце")
-
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx+1]):
-                issues.append(f"«{title_short}…» – после заголовка должна быть пустая строка")
-
-        # ---------- ПОДРАЗДЕЛЫ ----------
-        elif re.match(r'^\d+\.\d+', text):
-            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', text).strip()
-            title_short = sub_name[:50]
-
-            # Абзацный отступ 1,0 см
-            if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.25:
-                issues.append(f"Подраздел «{title_short}…» – абзацный отступ должен быть 1,0 см")
-
-            if not is_bold_paragraph(p):
-                issues.append(f"Подраздел «{title_short}…» – должен быть полужирным")
-
-            # Первая буква заглавная, остальные — строчные (кроме аббревиатур)
-            if sub_name and (sub_name[0].islower() or 
-                           (len(sub_name) > 3 and any(c.isupper() for c in sub_name[2:]) and not re.search(r'[А-ЯЁ]{2,}', sub_name))):
-                issues.append(f"Подраздел «{title_short}…» – первая буква прописная, остальные строчные")
-
-            if text.endswith("."):
-                issues.append(f"Подраздел «{title_short}…» – удалите точку")
-
-            if prev_was_empty:
-                issues.append(f"Подраздел «{title_short}…» – уберите пустую строку перед подразделом")
-
-        # ---------- ОСНОВНОЙ ТЕКСТ ----------
-        elif in_main_text and not text.startswith("Рисунок") and not text.startswith("Таблица"):
-            if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.25:
-                issues.append(f"Абзац «{text[:45]}…» – установите отступ первой строки 1,0 см")
-
-            if pf.space_before and pf.space_before.pt > 0.5:
-                issues.append(f"Абзац «{text[:45]}…» – интервал перед должен быть 0 пт")
-
-        # ---------- РИСУНКИ ----------
-        if text.startswith("Рисунок"):
-            figure_counter += 1
-            m = re.match(r'^Рисунок\s+\d+\s*[–-]\s*(.+)$', text)
-            title = m.group(1).strip() if m else ""
-
-            if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"Рисунок {figure_counter} – подпись должна быть по центру")
-
-            if text.endswith("."):
-                issues.append(f"Рисунок {figure_counter} – удалите точку в конце")
-
-            if title and title[0].islower():
-                issues.append(f"Рисунок {figure_counter} – название должно начинаться с заглавной буквы")
-
-            # Пустые строки до и после
-            if idx > 0 and not is_empty_paragraph(doc.paragraphs[idx-1]):
-                issues.append(f"Рисунок {figure_counter} – добавьте пустую строку перед подписью")
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx+1]):
-                issues.append(f"Рисунок {figure_counter} – добавьте пустую строку после подписи")
-
-        prev_was_empty = False
-
-    # ====================== ТАБЛИЦЫ (только в основном тексте) ======================
-    for t_idx, table in enumerate(doc.tables, start=1):
-        # Простая эвристика — таблицы после ВВЕДЕНИЯ
-        if intro_start and list(doc.element.body).index(table._element) < list(doc.element.body).index(doc.paragraphs[intro_start]._element):
+                issues.append("Содержание – выровняйте слово по центру")
+            if not is_bold(p):
+                issues.append("Содержание – заголовок должен быть полужирным")
+            if idx + 1 < len(doc.paragraphs) and not is_empty(doc.paragraphs[idx+1]):
+                issues.append("Содержание – после заголовка должна быть пустая строка")
             continue
 
-        # Поиск подписи над таблицей
-        caption = None
-        for i in range(len(doc.paragraphs)-1, -1, -1):
-            if doc.paragraphs[i].text.strip().startswith("Таблица"):
-                caption = doc.paragraphs[i].text.strip()
-                break
+        # ---------- СПИСОК ИСТОЧНИКОВ ----------
+        if idx >= ref_start:
+            if idx == ref_start:
+                # Проверка самого заголовка списка
+                if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                    issues.append("Список источников – заголовок по центру")
+                if not is_bold(p):
+                    issues.append("Список источников – заголовок полужирный")
+                continue
+            
+            if not ref_checked:
+                # Проверяем только первый источник, чтобы не дублировать ошибки
+                indent_left = pf.left_indent.cm if pf.left_indent else 0.0
+                indent_first = get_indent_cm(pf)
+                
+                if abs(indent_left) > 0.1:
+                    issues.append("Список источников – отступ слева должен быть 0 см")
+                if abs(indent_first - 1.0) > 0.15:
+                    issues.append("Список источников – отступ первой строки 1,0 см")
+                if pf.line_spacing_rule == WD_LINE_SPACING.MULTIPLE:
+                    if abs(pf.line_spacing - 1.2) > 0.05:
+                        issues.append("Список источников – междустрочный интервал должен быть 1,2")
+                elif pf.line_spacing_rule != WD_LINE_SPACING.MULTIPLE:
+                    issues.append("Список источников – установите множитель междустрочного интервала 1,2")
+                if p.alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:
+                    issues.append("Список источников – выровняйте текст по ширине")
+                ref_checked = True
+            continue
 
-        if caption:
-            if not re.match(r'^Таблица\s+\d+\s+--\s+', caption):
-                issues.append(f"Таблица {t_idx} – формат подписи: «Таблица N -- Название»")
-            if caption.rstrip().endswith("."):
+        # ---------- ЗАГОЛОВКИ РАЗДЕЛОВ (УРОВЕНЬ 1) ----------
+        is_l1 = (txt.upper() in ("ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ") or 
+                 re.match(r'^\d+\.\s+[А-ЯЁ]', txt))
+        if is_l1:
+            section_title = txt[:40]
+            # Разрыв страницы (кроме Введения, если оно идёт сразу после содержания)
+            if txt != "ВВЕДЕНИЕ":
+                has_break = False
+                if idx > 0:
+                    prev = doc.paragraphs[idx-1]
+                    has_break = any('w:br' in r._element.xml and 'type="page"' in r._element.xml for r in prev.runs)
+                if not has_break and p.runs:
+                    has_break = any('w:br' in r._element.xml and 'type="page"' in r._element.xml for r in p.runs)
+                if not has_break:
+                    issues.append(f"«{section_title}…» – раздел должен начинаться с новой страницы")
+            
+            if abs(get_indent_cm(pf)) > 0.1:
+                issues.append(f"«{section_title}…» – уберите абзацный отступ")
+            if not is_bold(p):
+                issues.append(f"«{section_title}…» – должен быть полужирным")
+            if txt != txt.upper():
+                issues.append(f"«{section_title}…» – должен быть прописными буквами")
+            if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                issues.append(f"«{section_title}…» – выравнивание по центру")
+            if txt.endswith("."):
+                issues.append(f"«{section_title}…» – удалите точку в конце")
+            if idx + 1 < len(doc.paragraphs) and not is_empty(doc.paragraphs[idx+1]):
+                issues.append(f"«{section_title}…» – после заголовка должна быть пустая строка")
+            continue
+
+        # ---------- ПОДРАЗДЕЛЫ ----------
+        if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', txt):
+            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', txt).strip()
+            if abs(get_indent_cm(pf) - 1.0) > 0.15:
+                issues.append(f"Подраздел «{sub_name[:30]}…» – установите отступ 1,0 см (сейчас {get_indent_cm(pf):.1f})")
+            if not is_bold(p):
+                issues.append(f"Подраздел «{sub_name[:30]}…» – должен быть полужирным")
+            # Проверка регистра: первая заглавная, остальные строчные
+            if sub_name and not (sub_name[0].isupper() and sub_name[1:].lower() == sub_name[1:]):
+                issues.append(f"Подраздел «{sub_name[:30]}…» – первая буква прописная, остальные строчные")
+            if txt.endswith("."):
+                issues.append(f"Подраздел «{sub_name[:30]}…» – удалите точку в конце")
+            if idx > 0 and is_empty(doc.paragraphs[idx-1]):
+                issues.append(f"Подраздел «{sub_name[:30]}…» – уберите пустую строку перед подразделом")
+            continue
+
+        # ---------- РИСУНКИ ----------
+        if txt.startswith("Рисунок"):
+            fig_counter += 1
+            if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                issues.append(f"Рисунок {fig_counter} – выровняйте подпись по центру")
+            if txt.endswith("."):
+                issues.append(f"Рисунок {fig_counter} – удалите точку в конце")
+            
+            m = re.match(r'^Рисунок\s+\d+\s*[–-]\s*(.+)$', txt)
+            if m:
+                title = m.group(1).strip()
+                if title and title[0].islower():
+                    issues.append(f"Рисунок {fig_counter} – название должно начинаться с большой буквы")
+            
+            # Пустые строки ДО и ПОСЛЕ для всех рисунков
+            if idx > 0 and not is_empty(doc.paragraphs[idx-1]):
+                issues.append(f"Рисунок {fig_counter} – добавьте пустую строку перед рисунком")
+            if idx + 1 < len(doc.paragraphs) and not is_empty(doc.paragraphs[idx+1]):
+                issues.append(f"Рисунок {fig_counter} – добавьте пустую строку после рисунка")
+            continue
+
+        # ---------- ОСНОВНОЙ ТЕКСТ ----------
+        if abs(get_indent_cm(pf) - 1.0) > 0.15:
+            issues.append(f"«{txt[:30]}…» – установите абзацный отступ 1,0 см (сейчас {get_indent_cm(pf):.1f})")
+        if pf.space_before and pf.space_before.pt > 0.5:
+            issues.append(f"«{txt[:30]}…» – интервал перед абзацем должен быть 0 пт")
+
+    # --------------------------------------------------
+    # ТАБЛИЦЫ (только в основном тексте)
+    # --------------------------------------------------
+    # Находим позицию элемента, после которого начинается основной текст
+    ref_elem = doc.paragraphs[toc_end]._element if toc_end is not None else None
+    main_tables = []
+    for table in doc.tables:
+        if ref_elem:
+            t_parent = table._element.getparent()
+            if t_parent is not None and t_parent == ref_elem.getparent():
+                children = list(t_parent)
+                if children.index(table._element) > children.index(ref_elem):
+                    main_tables.append(table)
+        else:
+            main_tables.append(table)
+
+    for t_idx, table in enumerate(main_tables, start=1):
+        t_pos = list(doc.element.body).index(table._element)
+        caption = None
+        # Ищем подпись в предыдущем абзаце
+        for i in range(t_pos-1, -1, -1):
+            elem = doc.element.body[i]
+            if elem.tag.endswith('p'):
+                caption = next((p for p in doc.paragraphs if p._element is elem), None)
+                break
+        
+        if caption and caption.text.strip().startswith("Таблица"):
+            cap_txt = caption.text.strip()
+            # Нормализуем тире для проверки
+            cap_norm = cap_txt.replace('--', '–').replace('-', '–')
+            if not re.match(r'Таблица\s+\d+\s*–\s+', cap_norm):
+                issues.append(f"Таблица {t_idx} – оформление: «Таблица N – Название»")
+            
+            m = re.search(r'Таблица\s+(\d+)', cap_txt)
+            if m and int(m.group(1)) != t_idx:
+                issues.append(f"Таблица {t_idx} – номер в подписи не соответствует порядку (должен быть {t_idx})")
+            if cap_txt.endswith("."):
                 issues.append(f"Таблица {t_idx} – удалите точку в конце названия")
+            
+            cap_idx = doc.paragraphs.index(caption)
+            if cap_idx > 0 and not is_empty(doc.paragraphs[cap_idx-1]):
+                issues.append(f"Таблица {t_idx} – добавьте пустую строку перед подписью")
+            
+            # Пустая строка после таблицы
+            next_found = False
+            for i in range(t_pos+1, len(doc.element.body)):
+                elem = doc.element.body[i]
+                if elem.tag.endswith('p'):
+                    next_p = next((p for p in doc.paragraphs if p._element is elem), None)
+                    if next_p and not is_empty(next_p):
+                        issues.append(f"Таблица {t_idx} – добавьте пустую строку после таблицы")
+                    next_found = True
+                    break
+            if not next_found:
+                issues.append(f"Таблица {t_idx} – добавьте пустую строку после таблицы")
+                
+            # Проверка на полужирный внутри ячеек
+            has_bold = any(r.bold for row in table.rows for cell in row.cells for para in cell.paragraphs for r in para.runs if r.text.strip())
+            if has_bold:
+                issues.append(f"Таблица {t_idx} – уберите полужирное начертание в ячейках")
         else:
             issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
 
-    # ====================== СПИСОК ИСТОЧНИКОВ ======================
-    if lit_start is not None:
-        # Первый источник после заголовка
-        first_source_idx = None
-        for i in range(lit_start + 1, len(doc.paragraphs)):
-            if doc.paragraphs[i].text.strip():
-                first_source_idx = i
-                break
-
-        if first_source_idx is not None:
-            p = doc.paragraphs[first_source_idx]
-            pf = p.paragraph_format
-
-            if pf.left_indent and abs(pf.left_indent.cm) > 0.1:
-                issues.append("Список источников – отступ слева должен быть 0")
-
-            if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.2:
-                issues.append("Список источников – отступ первой строки 1,0 см")
-
-            # Множитель 1,2
-            if pf.line_spacing_rule != WD_LINE_SPACING.MULTIPLE or abs(pf.line_spacing - 1.2) > 0.05:
-                issues.append("Список источников – междустрочный интервал 1,2 (множитель)")
-
-            if p.alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:
-                issues.append("Список источников – выравнивание по ширине")
-
-    # Убираем дубликаты
+    # --------------------------------------------------
+    # ФИНАЛИЗАЦИЯ
+    # --------------------------------------------------
     issues = list(dict.fromkeys(issues))
-
     if not issues:
-        return ["✅ Ошибок не найдено. Документ соответствует требованиям."]
-    
+        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
     return issues
 
-
-# ====================== STREAMLIT ======================
-st.set_page_config(page_title="Нормоконтроль ВКР", layout="centered")
-st.title("📘 Проверка оформления ВКР / дипломной работы")
-st.write("Загрузите .docx файл")
+# ---------- STREAMLIT ИНТЕРФЕЙС ----------
+st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
+st.title("📊 Автоматическая проверка документов Word")
+st.write("Загрузите ваш документ в формате .docx – проверка по полному чек-листу.")
 
 uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
-
 if uploaded_file is not None:
-    with st.spinner("Анализируем документ..."):
+    with st.spinner("Проверяем..."):
         results = check_word_document(uploaded_file)
-    
     st.subheader("Результаты проверки:")
-    for issue in results:
-        st.write(f"• {issue}")
+    for r in results:
+        st.write(f"• {r}")
