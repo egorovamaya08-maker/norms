@@ -18,23 +18,20 @@ def get_effective_alignment(paragraph):
 def is_paragraph_bold(paragraph):
     """
     Проверяет, является ли текст параграфа полужирным.
-    Возвращает (is_bold, info)
+    Возвращает True если есть хоть какая-то жирность (полная или частичная),
+    False если жирности нет совсем.
     """
     # Способ 1: проверяем runs
     runs = [r for r in paragraph.runs if r.text.strip()]
     if runs:
-        if all(r.bold for r in runs):
-            return True, "все runs жирные"
-        if not any(r.bold for r in runs):
-            return False, "ни один run не жирный"
-        bold_runs = sum(1 for r in runs if r.bold)
-        total_runs = len(runs)
-        return None, f"частично: {bold_runs}/{total_runs} runs жирные"
+        # Если хоть один run жирный — считаем что жирность есть
+        if any(r.bold for r in runs):
+            return True
     
     # Способ 2: проверяем стиль параграфа
     try:
         if paragraph.style and paragraph.style.font and paragraph.style.font.bold:
-            return True, "стиль жирный"
+            return True
     except:
         pass
     
@@ -42,12 +39,16 @@ def is_paragraph_bold(paragraph):
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
+            # Проверяем rPr в pPr (стиль параграфа)
             pPr_rPr = pPr.find(qn('w:rPr'))
             if pPr_rPr is not None:
                 bold_elem = pPr_rPr.find(qn('w:b'))
                 if bold_elem is not None:
-                    return True, "XML pPr/rPr жирный"
+                    val = bold_elem.get(qn('w:val'))
+                    if val != 'false' and val != '0':
+                        return True
             
+            # Проверяем rPr в каждом run
             for r in paragraph._element.findall(qn('w:r')):
                 rPr = r.find(qn('w:rPr'))
                 if rPr is not None:
@@ -55,11 +56,11 @@ def is_paragraph_bold(paragraph):
                     if bold_elem is not None:
                         val = bold_elem.get(qn('w:val'))
                         if val != 'false' and val != '0':
-                            return True, "XML run жирный"
+                            return True
     except:
         pass
     
-    return False, "не удалось определить"
+    return False
 
 def is_empty_paragraph(paragraph):
     return len(paragraph.text.strip()) == 0
@@ -317,20 +318,17 @@ def check_word_document(file):
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
         
-        # ОПРЕДЕЛЕНИЕ ТИПА АБЗАЦА (строгая иерархия)
+        # ОПРЕДЕЛЕНИЕ ТИПА АБЗАЦА
         is_level1 = False
         is_subsection = False
         is_figure = text.startswith("Рисунок")
         is_table_caption = text.startswith("Таблица")
         
-        # 1. Сначала проверяем раздел первого уровня (самый высокий приоритет)
         if is_section_header(text):
             is_level1 = True
-        # 2. Затем проверяем подраздел (только если не раздел)
         elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
             is_subsection = True
         else:
-            # 3. Проверяем через содержание (только для потенциальных заголовков)
             normalized = normalize_title(text)
             in_toc = any(normalize_title(e) == normalized for e in toc_entries) if toc_entries else False
             if in_toc and len(text) > 20:
@@ -355,12 +353,9 @@ def check_word_document(file):
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
             
-            # Проверка жирности (улучшенная)
-            is_bold, bold_info = is_paragraph_bold(p)
-            if is_bold == False:
+            # Проверка жирности — ошибка только если совсем нет жирности
+            if not is_paragraph_bold(p):
                 auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
-            elif is_bold is None:
-                auto_issues.append(f"«{text[:50]}» – заголовок раздела имеет частичную жирность, сделайте полностью полужирным")
             
             if re.match(r'^\d+\.', text) and not is_all_caps(text):
                 auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
@@ -382,12 +377,9 @@ def check_word_document(file):
             if abs(first_line - 1.0) > 0.2:
                 auto_issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             
-            # Проверка жирности для подразделов
-            is_bold, bold_info = is_paragraph_bold(p)
-            if is_bold == False:
+            # Проверка жирности — ошибка только если совсем нет жирности
+            if not is_paragraph_bold(p):
                 auto_issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
-            elif is_bold is None:
-                auto_issues.append(f"Подраздел «{sub_name[:50]}» – заголовок имеет частичную жирность, сделайте полностью полужирным")
             
             if text.endswith("."):
                 auto_issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
@@ -418,7 +410,7 @@ def check_word_document(file):
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
         
-        # --- Подпись таблицы (пропускаем) ---
+        # --- Подпись таблицы ---
         elif is_table_caption:
             pass
         
@@ -461,24 +453,19 @@ def check_word_document(file):
             continue
         tables_in_range.append((tbl_pos, table))
 
-    # Классифицируем таблицы
     main_tables = []
     
     for tbl_pos, table in tables_in_range:
         caption, cap_pos = find_nearest_caption(doc, tbl_pos, start_body_pos)
         
-        # Основная таблица: перед ней подпись "Таблица N — Название"
         if caption and re.match(r'Таблица\s+[\d.]+\s+[–—]', caption):
             main_tables.append((tbl_pos, table, caption, cap_pos))
-        # Продолжение: пропускаем
         elif caption and is_table_continuation(caption):
             continue
         else:
-            # Проверяем через один абзац
             caption2, cap_pos2 = find_nearest_caption(doc, cap_pos if cap_pos else tbl_pos, start_body_pos)
             if caption2 and is_table_continuation(caption2):
                 continue
-            # Всё остальное — считаем основной таблицей без подписи
             main_tables.append((tbl_pos, table, None, None))
 
     for t_idx, (tbl_pos, table, caption, cap_pos) in enumerate(main_tables, start=1):
@@ -514,7 +501,6 @@ def check_word_document(file):
         else:
             auto_issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
 
-        # Полужирный внутри таблицы
         bold_in_table = False
         for row in table.rows:
             for cell in row.cells:
@@ -533,7 +519,6 @@ def check_word_document(file):
             tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
             auto_issues.append(f"Таблица {tbl_num} – уберите полужирное начертание внутри таблицы")
 
-        # Перенос
         if len(table.rows) > 2:
             tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
             next_main_pos = end_body_pos
