@@ -1,39 +1,95 @@
 import streamlit as st
 import docx
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 import re
 
-def get_effective_alignment(paragraph):
-    if paragraph.alignment is not None:
-        return paragraph.alignment
-    try:
-        style = paragraph.style
-        if style and style.paragraph_format.alignment is not None:
-            return style.paragraph_format.alignment
-    except:
-        pass
-    return None
+def has_page_number(text):
+    if re.search(r'[\t\s\.]{2,}\d+$', text):
+        return True
+    return False
 
 def is_paragraph_bold(paragraph):
+    """Проверяет, является ли текст параграфа полужирным"""
+    # Способ 1: проверяем runs
+    runs = [r for r in paragraph.runs if r.text.strip()]
+    if runs:
+        # Если все runs с текстом жирные - параграф жирный
+        if all(r.bold for r in runs):
+            return True, "все runs жирные"
+        # Если ни один run не жирный - параграф не жирный
+        if not any(r.bold for r in runs):
+            return False, "ни один run не жирный"
+        # Часть runs жирные, часть нет
+        bold_runs = sum(1 for r in runs if r.bold)
+        total_runs = len(runs)
+        return None, f"частично: {bold_runs}/{total_runs} runs жирные"
+    
+    # Способ 2: проверяем стиль параграфа
     try:
         if paragraph.style and paragraph.style.font and paragraph.style.font.bold:
-            return True
+            return True, "стиль жирный"
     except:
         pass
-    runs = [r for r in paragraph.runs if r.text.strip()]
-    if not runs:
-        return False
-    return all(r.bold for r in runs)
+    
+    # Способ 3: проверяем XML напрямую
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            # Проверяем rPr в pPr (стиль параграфа)
+            pPr_rPr = pPr.find(qn('w:rPr'))
+            if pPr_rPr is not None:
+                bold_elem = pPr_rPr.find(qn('w:b'))
+                if bold_elem is not None:
+                    return True, "XML pPr/rPr жирный"
+            
+            # Проверяем rPr в каждом run
+            for r in paragraph._element.findall(qn('w:r')):
+                rPr = r.find(qn('w:rPr'))
+                if rPr is not None:
+                    bold_elem = rPr.find(qn('w:b'))
+                    if bold_elem is not None:
+                        # Проверяем, не установлен ли bold в false
+                        val = bold_elem.get(qn('w:val'))
+                        if val != 'false' and val != '0':
+                            return True, "XML run жирный"
+    except:
+        pass
+    
+    return False, "не удалось определить"
 
-def is_empty_paragraph(paragraph):
-    return len(paragraph.text.strip()) == 0
-
-def has_page_number(text):
-    return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
+def get_paragraph_bold_details(paragraph):
+    """Детальная информация о жирности"""
+    details = []
+    
+    # Информация о runs
+    for i, run in enumerate(paragraph.runs):
+        if run.text.strip():
+            bold_status = "жирный" if run.bold else "обычный"
+            details.append(f"  Run {i}: '{run.text[:30]}...' - {bold_status}")
+    
+    # Информация из стиля
+    try:
+        style_name = paragraph.style.name if paragraph.style else "нет стиля"
+        style_bold = paragraph.style.font.bold if paragraph.style and paragraph.style.font else "не определено"
+        details.append(f"  Стиль: {style_name}, bold в стиле: {style_bold}")
+    except:
+        details.append(f"  Стиль: ошибка чтения")
+    
+    # Информация из XML
+    try:
+        xml_str = etree.tostring(paragraph._element, encoding='unicode')
+        # Ищем все упоминания жирности
+        if '<w:b/>' in xml_str or '<w:b ' in xml_str:
+            details.append(f"  XML: содержит теги жирности")
+        else:
+            details.append(f"  XML: нет тегов жирности")
+    except:
+        pass
+    
+    return details
 
 def is_all_caps(text):
-    clean_text = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
+    clean_text = re.sub(r'[\d\s\.,;:!?\-–—()«»""''\-\+–—]', '', text)
     if not clean_text:
         return False
     return clean_text == clean_text.upper()
@@ -64,490 +120,122 @@ def extract_toc_entries(doc, start_idx):
                 toc_entries.append(clean)
     return toc_entries
 
-def get_list_marker_info(paragraph, doc):
-    text = paragraph.text.strip()
-    if not text:
-        return False, "", True
-    
-    try:
-        pPr = paragraph._element.find(qn('w:pPr'))
-        if pPr is not None:
-            numPr = pPr.find(qn('w:numPr'))
-            if numPr is not None:
-                numId_elem = numPr.find(qn('w:numId'))
-                if numId_elem is not None:
-                    numId = numId_elem.get(qn('w:val'))
-                    numbering_part = doc.part.numbering_part
-                    if numbering_part is not None:
-                        numbering_xml = numbering_part._element
-                        abstractNumId = None
-                        for num in numbering_xml.findall(qn('w:num')):
-                            if num.get(qn('w:numId')) == numId:
-                                aid_elem = num.find(qn('w:abstractNumId'))
-                                if aid_elem is not None:
-                                    abstractNumId = aid_elem.get(qn('w:val'))
-                                break
-                        if abstractNumId:
-                            for abstractNum in numbering_xml.findall(qn('w:abstractNum')):
-                                if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
-                                    for lvl in abstractNum.findall(qn('w:lvl')):
-                                        numFmt = lvl.find(qn('w:numFmt'))
-                                        if numFmt is not None:
-                                            fmt = numFmt.get(qn('w:val'))
-                                            if fmt == 'bullet':
-                                                return True, "круглый маркер (•)", False
-                                            elif fmt == 'decimal':
-                                                return True, "нумерованный (цифры)", True
-                                            elif fmt in ['lowerLetter', 'upperLetter']:
-                                                return True, "буквенный", True
-                                            else:
-                                                return True, f"формат '{fmt}'", True
-    except:
-        pass
-    
-    if re.match(r'^\d+\)', text):
-        return True, "нумерованный", True
-    if re.match(r'^[а-яё]\)', text):
-        return True, "буквенный", True
-    if re.match(r'^[a-z]\)', text):
-        return True, "буквенный", True
-    if re.match(r'^[\-–—]', text):
-        return True, "тире", True
-    if text and ord(text[0]) in [8226, 8227, 9679, 9702]:
-        return True, "круглый маркер (•)", False
-    
-    return False, "", True
-
-def get_effective_first_line_indent(paragraph):
-    pf = paragraph.paragraph_format
-    if pf.first_line_indent is not None:
-        return pf.first_line_indent.cm
-    try:
-        style = paragraph.style
-        if style and style.paragraph_format.first_line_indent is not None:
-            return style.paragraph_format.first_line_indent.cm
-    except:
-        pass
-    try:
-        pPr = paragraph._element.find(qn('w:pPr'))
-        if pPr is not None:
-            ind = pPr.find(qn('w:ind'))
-            if ind is not None:
-                first_line = ind.get(qn('w:firstLine'))
-                hanging = ind.get(qn('w:hanging'))
-                if first_line is not None:
-                    return int(first_line) / 567
-                elif hanging is not None:
-                    return 0
-    except:
-        pass
-    return 0
-
-def get_effective_left_indent(paragraph):
-    pf = paragraph.paragraph_format
-    if pf.left_indent is not None:
-        return pf.left_indent.cm
-    try:
-        style = paragraph.style
-        if style and style.paragraph_format.left_indent is not None:
-            return style.paragraph_format.left_indent.cm
-    except:
-        pass
-    try:
-        pPr = paragraph._element.find(qn('w:pPr'))
-        if pPr is not None:
-            ind = pPr.find(qn('w:ind'))
-            if ind is not None:
-                left = ind.get(qn('w:left'))
-                if left is not None:
-                    return int(left) / 567
-    except:
-        pass
-    return 0
-
-def is_table_continuation(text):
-    return bool(re.match(r'^(?:Продолжение|Окончание)\s+таблицы?\s*\d', text))
-
-def get_table_depth(table):
-    depth = 0
-    element = table._element
-    parent = element.getparent()
-    while parent is not None:
-        if parent.tag == qn('w:tbl'):
-            depth += 1
-        parent = parent.getparent()
-    return depth
-
-def find_nearest_caption(doc, tbl_pos, start_body_pos):
-    """Ищет ближайший непустой абзац перед таблицей"""
-    for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-        elem = doc.element.body[i]
-        if elem.tag.endswith('p'):
-            for para in doc.paragraphs:
-                if para._element is elem and para.text.strip():
-                    return para.text.strip(), i
-    return None, None
-
-def check_word_document(file):
+def test_document(file):
     doc = docx.Document(file)
-    auto_issues = []
-    manual_checks = []
-
-    # ---------- 1. ПОЛЯ СТРАНИЦ ----------
-    margins_ok = True
-    for section in doc.sections:
-        if (abs(section.left_margin.mm - 20) > 0.5 or
-            abs(section.right_margin.mm - 20) > 0.5 or
-            abs(section.top_margin.mm - 20) > 0.5 or
-            abs(section.bottom_margin.mm - 20) > 0.5):
-            margins_ok = False
-            break
-    if not margins_ok:
-        auto_issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
-
-    # ---------- 2. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
-    start_idx = None
+    
+    st.header("🔍 Проверка жирности заголовков")
+    
+    # Ищем начало основного текста
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
+    start_idx = None
     
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
-        if not txt:
+        if not txt or has_page_number(txt):
             continue
-        if has_page_number(txt):
-            continue
-        if re.match(r'^\d+\.\s+[А-Яа-я]', txt) and not is_all_caps(txt):
-            continue
-        if is_section_header(txt):
+        if txt.upper() in level1_keywords or (re.match(r'^\d+\.\s+[А-ЯЁ]', txt) and is_all_caps(txt)):
             start_idx = i
+            st.write(f"✅ Начало текста: строка {i} ('{txt[:80]}')")
             break
     
     if start_idx is None:
-        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
-
+        st.warning("⚠️ Не найдено начало основного текста")
+        return
+    
     toc_entries = extract_toc_entries(doc, start_idx)
-
-    # ---------- 3. ГРАНИЦЫ СПИСКА ИСТОЧНИКОВ ----------
-    lit_start = None
+    
+    st.write("---")
+    st.write("**Проверка заголовков:**")
+    st.write("Требование: заголовки разделов должны быть ПОЛУЖИРНЫМ")
+    
+    headers_checked = 0
+    headers_bold = 0
+    headers_not_bold = 0
+    headers_partial = 0
+    
     for i in range(start_idx, len(doc.paragraphs)):
-        txt = doc.paragraphs[i].text.strip()
-        if txt.upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ" and not has_page_number(txt):
-            lit_start = i
+        p = doc.paragraphs[i]
+        txt = p.text.strip()
+        
+        if not txt or has_page_number(txt):
+            continue
+        
+        # Определяем, является ли заголовком
+        is_header = False
+        header_type = ""
+        
+        if is_section_header(txt):
+            is_header = True
+            header_type = "раздел"
+        else:
+            # Проверяем по содержанию
+            normalized = normalize_title(txt)
+            in_toc = any(normalize_title(e) == normalized for e in toc_entries)
+            if in_toc and len(txt) > 20:
+                is_header = True
+                header_type = "из содержания"
+            elif is_all_caps(txt) and len(txt) > 25:
+                is_header = True
+                header_type = "капсом"
+        
+        if is_header:
+            headers_checked += 1
+            
+            is_bold, bold_info = is_paragraph_bold(p)
+            
+            st.write(f"**Заголовок {headers_checked}** (строка {i}, {header_type}):")
+            st.write(f"  '{txt[:100]}'")
+            st.write(f"  Жирность: {bold_info}")
+            
+            if is_bold == True:
+                st.write(f"  ✅ Заголовок полужирный - правильно")
+                headers_bold += 1
+            elif is_bold == False:
+                st.write(f"  ❌ Заголовок НЕ полужирный - нужно сделать жирным!")
+                headers_not_bold += 1
+            elif is_bold is None:
+                st.write(f"  ⚠️ Заголовок частично жирный - проверьте!")
+                st.write(f"  Детали:")
+                details = get_paragraph_bold_details(p)
+                for detail in details:
+                    st.write(detail)
+                headers_partial += 1
+            
+            # Показываем детали для первых 5 заголовков
+            if headers_checked <= 5:
+                st.write(f"  Детали форматирования:")
+                details = get_paragraph_bold_details(p)
+                for detail in details:
+                    st.write(detail)
+            
+            st.write("---")
+        
+        if headers_checked >= 30:
             break
     
-    lit_end = len(doc.paragraphs)
-    if lit_start is not None:
-        appendix_keywords = ["ПРИЛОЖЕНИЕ", "ПРИЛОЖЕНИЯ", "APPENDIX"]
-        for i in range(lit_start + 1, len(doc.paragraphs)):
-            txt = doc.paragraphs[i].text.strip().upper()
-            if any(txt.startswith(kw) for kw in appendix_keywords):
-                lit_end = i
-                break
-
-    # ---------- 4. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
-    figure_counter = 0
-    prev_para_empty = False
-    end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
-
-    for idx in range(start_idx, end_idx):
-        p = doc.paragraphs[idx]
-        text = p.text.strip()
-        
-        if not text:
-            prev_para_empty = True
-            continue
-        if has_page_number(text):
-            prev_para_empty = False
-            continue
-        if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_all_caps(text):
-            prev_para_empty = False
-            continue
-        
-        is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
-        if is_list:
-            if not marker_valid:
-                auto_issues.append(f"«{text[:50]}» – замените круглый маркер (•) на тире, букву или цифру")
-            prev_para_empty = False
-            continue
-        
-        if is_table_continuation(text):
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line) > 0.1:
-                auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
-            prev_para_empty = False
-            continue
-
-        pf = p.paragraph_format
-        alignment = get_effective_alignment(p)
-        
-        is_level1 = is_section_header(text)
-        is_subsection = bool(re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text)) and not is_level1
-        is_figure = text.startswith("Рисунок")
-        is_table_caption = text.startswith("Таблица")
-        
-        normalized = normalize_title(text)
-        in_toc = any(normalize_title(e) == normalized for e in toc_entries) if toc_entries else False
-        if in_toc and not is_level1 and not is_subsection and len(text) > 20:
-            is_subsection = True
-
-        if is_level1:
-            if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
-                page_break = False
-                if idx > start_idx:
-                    prev_p = doc.paragraphs[idx - 1]
-                    for run in prev_p.runs:
-                        if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                            page_break = True
-                for run in p.runs:
-                    if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                        page_break = True
-                if not page_break:
-                    auto_issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
-            
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line) > 0.1:
-                auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
-            if not is_paragraph_bold(p):
-                auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
-            if re.match(r'^\d+\.', text) and not is_all_caps(text):
-                auto_issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
-            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                auto_issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
-            if text.endswith("."):
-                auto_issues.append(f"«{text[:50]}» – удалите точку в конце")
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                auto_issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
-        
-        elif is_subsection:
-            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line - 1.0) > 0.2:
-                auto_issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
-            if not is_paragraph_bold(p):
-                auto_issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
-            if text.endswith("."):
-                auto_issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
-            if prev_para_empty:
-                auto_issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
-        
-        elif is_figure:
-            figure_counter += 1
-            fig_match = re.match(r'^(Рисунок\s+\d+(?:\.\d+)?)', text)
-            fig_number = fig_match.group(1) if fig_match else f"Рисунок {figure_counter}"
-            
-            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
-            if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
-                auto_issues.append(f"{fig_number} – удалите точку в конце")
-            m = re.match(r'^Рисунок\s+\d+(?:\.\d+)?\s*[–\-]\s*(.+)$', text)
-            if m:
-                title = m.group(1).strip()
-                if title and title[0].islower():
-                    auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
-            if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
-                manual_checks.append(f"{fig_number} – проверьте наличие пустой строки перед рисунком")
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
-        
-        elif is_table_caption:
-            pass
-        
-        else:
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line - 1.0) > 0.2:
-                auto_issues.append(f"«{text[:50]}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
-            if pf.space_before and pf.space_before.pt > 0.5:
-                auto_issues.append(f"«{text[:50]}» – интервал перед абзацем должен быть 0 пт")
-        
-        prev_para_empty = False
-
-    # ---------- 5. ТАБЛИЦЫ ----------
-    try:
-        start_element = doc.paragraphs[start_idx]._element
-        start_body_pos = list(doc.element.body).index(start_element)
-    except:
-        start_body_pos = 0
-
-    end_body_pos = len(doc.element.body)
-    if lit_start is not None:
-        try:
-            lit_element = doc.paragraphs[lit_start]._element
-            end_body_pos = list(doc.element.body).index(lit_element)
-        except:
-            pass
-
-    # Собираем таблицы в диапазоне (не вложенные)
-    tables_in_range = []
-    for table in doc.tables:
-        if get_table_depth(table) > 0:
-            continue
-        try:
-            tbl_pos = list(doc.element.body).index(table._element)
-        except:
-            continue
-        if not (start_body_pos < tbl_pos < end_body_pos):
-            continue
-        if len(table.rows) == 0:
-            continue
-        tables_in_range.append((tbl_pos, table))
-
-    # КЛАССИФИЦИРУЕМ таблицы: основная или продолжение
-    # Основная — перед ней есть подпись "Таблица N — Название"
-    # Продолжение — перед ней "Продолжение/Окончание таблицы N"
+    # Итоги
+    st.write("---")
+    st.write("**Итоги проверки жирности:**")
+    st.write(f"• Проверено заголовков: {headers_checked}")
+    st.write(f"• ✅ Правильно (жирные): {headers_bold}")
+    st.write(f"• ❌ Не жирные: {headers_not_bold}")
+    st.write(f"• ⚠️ Частично жирные: {headers_partial}")
     
-    main_tables = []
-    continuation_tables = []
-    
-    for tbl_pos, table in tables_in_range:
-        caption, cap_pos = find_nearest_caption(doc, tbl_pos, start_body_pos)
-        
-        if caption and re.match(r'Таблица\s+[\d.]+\s+[–—]', caption):
-            # Это основная таблица с подписью
-            main_tables.append((tbl_pos, table, caption, cap_pos))
-        elif caption and is_table_continuation(caption):
-            # Это продолжение таблицы
-            continuation_tables.append((tbl_pos, table, caption, cap_pos))
-        else:
-            # Нет ни подписи, ни маркера продолжения — возможно ошибка
-            # Проверим, может перед таблицей пустая строка, а перед ней маркер
-            caption2, cap_pos2 = find_nearest_caption(doc, cap_pos if cap_pos else tbl_pos, start_body_pos)
-            if caption2 and is_table_continuation(caption2):
-                continuation_tables.append((tbl_pos, table, caption2, cap_pos2))
-            else:
-                # Непонятная таблица — проверим как основную без подписи
-                main_tables.append((tbl_pos, table, None, None))
+    if headers_not_bold == 0 and headers_partial == 0:
+        st.success("✅ Все заголовки правильно оформлены (полужирные)")
+    elif headers_not_bold > 0:
+        st.error(f"❌ {headers_not_bold} заголовков нужно сделать полужирными")
+    elif headers_partial > 0:
+        st.warning(f"⚠️ {headers_partial} заголовков имеют частичную жирность")
 
-    # Проверяем основные таблицы
-    for t_idx, (tbl_pos, table, caption, cap_pos) in enumerate(main_tables, start=1):
-        if caption:
-            tbl_num_match = re.match(r'Таблица\s+([\d.]+)', caption)
-            tbl_num = tbl_num_match.group(1) if tbl_num_match else str(t_idx)
-            
-            # Тире в подписи
-            if '—' not in caption and '–' not in caption:
-                if '--' in caption or ' - ' in caption:
-                    auto_issues.append(f"Таблица {tbl_num} – замените дефис на тире (—) в подписи")
-            
-            # Формат подписи
-            if not re.match(r'Таблица\s+[\d.]+\s+[–—]\s+', caption):
-                auto_issues.append(f"Таблица {tbl_num} – должно быть «Таблица {tbl_num} — Название»")
-            
-            # Без точки
-            if caption.rstrip().endswith("."):
-                auto_issues.append(f"Таблица {tbl_num} – удалите точку в конце названия")
-            
-            # Пустые строки
-            if cap_pos is not None and cap_pos > start_idx:
-                if not is_empty_paragraph(doc.paragraphs[cap_pos - 1]):
-                    manual_checks.append(f"Таблица {tbl_num} – проверьте наличие пустой строки перед подписью таблицы")
-            
-            next_para = None
-            for i in range(tbl_pos + 1, end_body_pos):
-                elem = doc.element.body[i]
-                if elem.tag.endswith('p'):
-                    for para in doc.paragraphs:
-                        if para._element is elem:
-                            next_para = para
-                            break
-                    break
-            if next_para and not is_empty_paragraph(next_para):
-                manual_checks.append(f"Таблица {tbl_num} – проверьте наличие пустой строки после таблицы")
-        else:
-            auto_issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
-
-        # Полужирный
-        bold_in_table = False
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    for run in para.runs:
-                        if run.bold:
-                            bold_in_table = True
-                            break
-                    if bold_in_table:
-                        break
-                if bold_in_table:
-                    break
-            if bold_in_table:
-                break
-        if bold_in_table:
-            tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
-            auto_issues.append(f"Таблица {tbl_num} – уберите полужирное начертание внутри таблицы")
-
-        # Перенос
-        if len(table.rows) > 2:
-            tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
-            # Ищем маркеры продолжения после этой таблицы до следующей основной
-            next_main_pos = end_body_pos
-            for next_pos, _, _, _ in main_tables[t_idx:]:
-                if next_pos > tbl_pos:
-                    next_main_pos = next_pos
-                    break
-            
-            markers_found = False
-            for i in range(tbl_pos + 1, next_main_pos):
-                if i < len(doc.paragraphs):
-                    txt = doc.paragraphs[i].text.strip()
-                    if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
-                        markers_found = True
-                        break
-            
-            if not markers_found:
-                manual_checks.append(f"Таблица {tbl_num} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
-
-    # ---------- 6. СПИСОК ИСТОЧНИКОВ ----------
-    if lit_start is not None:
-        sources_with_issues = 0
-        for i in range(lit_start + 1, lit_end):
-            source = doc.paragraphs[i]
-            txt = source.text.strip()
-            if not txt or has_page_number(txt):
-                continue
-            
-            has_issue = False
-            left_indent = get_effective_left_indent(source)
-            if abs(left_indent) > 0.1:
-                has_issue = True
-            first_line = get_effective_first_line_indent(source)
-            if abs(first_line - 1.0) > 0.1:
-                has_issue = True
-            if has_issue:
-                sources_with_issues += 1
-        
-        if sources_with_issues > 0:
-            auto_issues.append(
-                "Список источников – проверьте оформление: "
-                "отступ слева 0 см, отступ первой строки 1,0 см, "
-                "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
-            )
-
-    # ---------- ИТОГ ----------
-    auto_issues = list(dict.fromkeys(auto_issues))
-    manual_checks = list(dict.fromkeys(manual_checks))
-    
-    result = []
-    if not auto_issues and not manual_checks:
-        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
-    
-    if auto_issues:
-        result.extend(auto_issues)
-    if manual_checks:
-        result.append("\n📋 Для ручной проверки проверяющего:")
-        result.extend(manual_checks)
-    
-    return result
 
 # Интерфейс
-st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
-st.title("📊 Автоматическая проверка документов Word")
-st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
-uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
+st.set_page_config(page_title="Проверка жирности заголовков", layout="wide")
+st.title("🔍 Проверка жирности заголовков разделов")
+st.write("Проверяет, являются ли заголовки разделов полужирными")
+
+uploaded_file = st.file_uploader("Загрузите .docx", type=["docx"])
 
 if uploaded_file is not None:
-    with st.spinner("Проверяем..."):
-        results = check_word_document(uploaded_file)
-    st.subheader("Результаты проверки:")
-    for r in results:
-        if r.startswith("📋"):
-            st.markdown(f"**{r}**")
-        else:
-            st.write(f"• {r}")
+    with st.spinner("Анализ..."):
+        test_document(uploaded_file)
