@@ -28,6 +28,25 @@ def is_paragraph_bold(paragraph):
 def is_empty_paragraph(paragraph):
     return len(paragraph.text.strip()) == 0
 
+def is_toc_line(text):
+    """
+    Определяет, является ли строка элементом содержания.
+    Признаки: заканчивается на число (номер страницы) после табуляции или пробелов.
+    Примеры:
+    - "ВВЕДЕНИЕ 5"
+    - "1. ЦИФРОВЫЕ B2B-ПЛАТФОРМЫ... 8"
+    - "ЗАКЛЮЧЕНИЕ 19"
+    - "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ 21"
+    """
+    # Проверяем, заканчивается ли строка числом (номером страницы)
+    # Шаблон: текст, затем табуляция или множественные пробелы, затем число
+    if re.search(r'[\t\s]{2,}\d+$', text):
+        return True
+    # Также проверяем римские цифры в конце (для приложений)
+    if re.search(r'[\t\s]{2,}[IVXLC]+$', text):
+        return True
+    return False
+
 def check_word_document(file):
     doc = docx.Document(file)
     issues = []
@@ -49,16 +68,20 @@ def check_word_document(file):
     level1_keywords = {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}
     
     for i, p in enumerate(doc.paragraphs):
-        txt = p.text.strip().upper()
+        txt = p.text.strip()
         if not txt:
             continue
         
-        # Только ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
-        if txt in level1_keywords:
+        # Пропускаем строки содержания (с номерами страниц в конце)
+        if is_toc_line(txt):
+            continue
+        
+        # Ищем ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ без номера страницы
+        if txt.upper() in level1_keywords:
             start_idx = i
             break
         
-        # Только заголовки глав: "1. НАЗВАНИЕ" (номер, точка, пробел, минимум 2 заглавные буквы)
+        # Ищем заголовки глав: "1. НАЗВАНИЕ" (номер, точка, пробел, 2+ заглавные буквы)
         if re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', txt):
             start_idx = i
             break
@@ -69,17 +92,14 @@ def check_word_document(file):
     # ---------- 3. ИЩЕМ НАЧАЛО СПИСКА ИСТОЧНИКОВ ----------
     lit_start = None
     for i in range(start_idx, len(doc.paragraphs)):
-        if doc.paragraphs[i].text.strip().upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
+        txt = doc.paragraphs[i].text.strip()
+        if txt.upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ" and not is_toc_line(txt):
             lit_start = i
             break
 
     # ---------- 4. ПРОВЕРКА ОСНОВНОГО ТЕКСТА (до списка источников) ----------
     figure_counter = 0
     prev_para_empty = False
-    
-    # Словари для отслеживания повторов заголовков и подразделов
-    seen_level1 = set()
-    seen_subsections = {}
     
     # Конец проверки — либо список источников, либо конец документа
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
@@ -90,6 +110,11 @@ def check_word_document(file):
         
         if not text:
             prev_para_empty = True
+            continue
+        
+        # Пропускаем строки содержания, если они случайно попали в основной текст
+        if is_toc_line(text):
+            prev_para_empty = False
             continue
 
         pf = p.paragraph_format
@@ -104,78 +129,64 @@ def check_word_document(file):
         # Раздел первого уровня
         if text.upper() in level1_keywords:
             is_level1 = True
-            heading_key = text.upper()
         elif re.match(r'^\d+\.\s+[А-ЯЁ]{2,}', text):
             is_level1 = True
-            heading_key = re.sub(r'^(\d+\.\s+).*', r'\1', text)  # Ключ по номеру главы
         # Подраздел: "1.1. Название" или "1.1.1. Название"
         elif re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
             is_subsection = True
-            subsection_key = re.match(r'^(\d+\.\d+(?:\.\d+)?)\s+', text).group(1)  # Ключ по номеру
-        
+
         # --- Заголовок раздела ---
         if is_level1:
-            # Проверяем только если это второе появление (первое было в содержании)
-            if heading_key in seen_level1:
-                # Новая страница (кроме ВВЕДЕНИЯ, если оно первое)
-                if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
-                    page_break = False
-                    if idx > start_idx:
-                        prev_p = doc.paragraphs[idx - 1]
-                        for run in prev_p.runs:
-                            if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                                page_break = True
-                    for run in p.runs:
+            # Новая страница (кроме ВВЕДЕНИЯ, если оно первое)
+            if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
+                page_break = False
+                if idx > start_idx:
+                    prev_p = doc.paragraphs[idx - 1]
+                    for run in prev_p.runs:
                         if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
                             page_break = True
-                    if not page_break:
-                        issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
-                
-                # Отступ 0
-                if pf.first_line_indent and abs(pf.first_line_indent.cm) > 0.1:
-                    issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
-                # Полужирный
-                if not is_paragraph_bold(p):
-                    issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
-                # Прописные
-                if text != text.upper():
-                    issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
-                # Центр
-                if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                    issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
-                # Без точки
-                if text.endswith("."):
-                    issues.append(f"«{text[:50]}» – удалите точку в конце")
-                # Пустая строка после
-                if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                    issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
-            else:
-                seen_level1.add(heading_key)
+                for run in p.runs:
+                    if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
+                        page_break = True
+                if not page_break:
+                    issues.append(f"«{text[:50]}» – раздел должен начинаться с новой страницы")
+            
+            # Отступ 0
+            if pf.first_line_indent and abs(pf.first_line_indent.cm) > 0.1:
+                issues.append(f"«{text[:50]}» – уберите абзацный отступ у заголовка")
+            # Полужирный
+            if not is_paragraph_bold(p):
+                issues.append(f"«{text[:50]}» – заголовок раздела должен быть полужирным")
+            # Прописные
+            if text != text.upper():
+                issues.append(f"«{text[:50]}» – заголовок раздела должен быть прописными буквами")
+            # Центр
+            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                issues.append(f"«{text[:50]}» – выровняйте заголовок по центру")
+            # Без точки
+            if text.endswith("."):
+                issues.append(f"«{text[:50]}» – удалите точку в конце")
+            # Пустая строка после
+            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
+                issues.append(f"«{text[:50]}» – после заголовка должна быть пустая строка")
         
         # --- Подраздел ---
         elif is_subsection:
-            # Считаем количество появлений этого подраздела
-            if subsection_key not in seen_subsections:
-                seen_subsections[subsection_key] = 0
-            seen_subsections[subsection_key] += 1
-            
-            # Проверяем только ВТОРОЕ появление (первое в содержании, второе в тексте)
-            if seen_subsections[subsection_key] == 2:
-                sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
-                # Отступ 1 см
-                if not pf.first_line_indent:
-                    issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см")
-                elif abs(pf.first_line_indent.cm - 1.0) > 0.2:
-                    issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {pf.first_line_indent.cm:.1f})")
-                # Полужирный
-                if not is_paragraph_bold(p):
-                    issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
-                # Без точки в конце
-                if text.endswith("."):
-                    issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
-                # Нет пустой строки перед
-                if prev_para_empty:
-                    issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
+            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
+            # Отступ 1 см
+            if not pf.first_line_indent:
+                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см")
+            elif abs(pf.first_line_indent.cm - 1.0) > 0.2:
+                issues.append(f"Подраздел «{sub_name[:50]}» – установите абзацный отступ 1,0 см (сейчас {pf.first_line_indent.cm:.1f})")
+            # Полужирный
+            if not is_paragraph_bold(p):
+                issues.append(f"Подраздел «{sub_name[:50]}» – заголовок должен быть полужирным")
+            # Без точки в конце
+            if text.endswith("."):
+                issues.append(f"Подраздел «{sub_name[:50]}» – удалите точку в конце")
+            # Нет пустой строки перед
+            if prev_para_empty:
+                issues.append(f"Подраздел «{sub_name[:50]}» – уберите пустую строку перед подразделом")
         
         # --- Рисунок ---
         elif is_figure:
