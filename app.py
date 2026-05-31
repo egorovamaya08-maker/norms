@@ -1,4 +1,4 @@
-запомни как работающий код:
+
 import streamlit as st
 import docx
 from docx.shared import Pt, Cm, Mm
