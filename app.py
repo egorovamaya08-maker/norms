@@ -5,12 +5,18 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import re
 
 
+# ==================================================
+# ОСНОВНАЯ ФУНКЦИЯ ПРОВЕРКИ
+# ==================================================
+
 def check_word_document(file):
 
     doc = docx.Document(file)
     issues = []
 
-    # ---------- ВСПОМОГАТЕЛЬНЫЕ ----------
+    # -----------------------------
+    # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+    # -----------------------------
 
     def is_empty_paragraph(p):
         return len(p.text.strip()) == 0
@@ -39,7 +45,9 @@ def check_word_document(file):
     def subsection_name(text):
         return re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
 
-    # ---------- ПОИСК СОДЕРЖАНИЯ ----------
+    # -----------------------------
+    # ПОИСК СОДЕРЖАНИЯ
+    # -----------------------------
 
     content_start = None
 
@@ -48,18 +56,18 @@ def check_word_document(file):
             content_start = i
             break
 
-    # ---------- СОСТОЯНИЯ ----------
-
-    BEFORE_CONTENT = 0
-    IN_CONTENT = 1
+    BEFORE = 0
+    CONTENT = 1
     BODY = 2
 
-    state = BEFORE_CONTENT
-
-    # ---------- ОСНОВНОЙ ПРОХОД ----------
+    state = BEFORE
 
     figure_counter = 0
-    prev_para_empty = False
+    prev_empty = False
+
+    # -----------------------------
+    # ОСНОВНОЙ ПРОХОД
+    # -----------------------------
 
     for idx, p in enumerate(doc.paragraphs):
 
@@ -67,99 +75,73 @@ def check_word_document(file):
             continue
 
         text = p.text.strip()
-        text_upper = text.upper()
 
         if not text:
-            prev_para_empty = True
+            prev_empty = True
             continue
 
+        text_upper = text.upper()
         pf = p.paragraph_format
 
-        # ==================================================
+        # =====================================
         # 1. ВХОД В СОДЕРЖАНИЕ
-        # ==================================================
+        # =====================================
 
         if text_upper == "СОДЕРЖАНИЕ":
-            state = IN_CONTENT
+            state = CONTENT
 
             if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append("Содержание – выровняйте по центру")
+                issues.append("Содержание – выровнять по центру")
 
             if not is_bold_paragraph(p):
-                issues.append("Содержание – сделайте полужирным")
+                issues.append("Содержание – сделать полужирным")
 
             continue
 
-        # ==================================================
+        # =====================================
         # 2. ОБРАБОТКА СОДЕРЖАНИЯ
-        # ==================================================
+        # =====================================
 
-        if state == IN_CONTENT:
+        if state == CONTENT:
 
-            # выход: первый реальный заголовок
+            # выход из содержания
             if is_level1_heading(text) and text_upper != "СОДЕРЖАНИЕ":
                 state = BODY
 
-            # ВНУТРИ СОДЕРЖАНИЯ НЕТ ЗАГОЛОВКОВ
-            # только форматирование
+            # ВАЖНО: внутри содержания НЕТ заголовков
             if p.alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:
-                issues.append("Содержание – выровняйте элементы содержания")
+                issues.append("Содержание – выровнять элементы")
 
             if pf.space_before and pf.space_before.pt > 0.5:
-                issues.append("Содержание – интервал перед абзацем должен быть 0 пт")
+                issues.append("Содержание – убрать интервал перед")
 
             if pf.space_after and pf.space_after.pt > 0.5:
-                issues.append("Содержание – интервал после абзаца должен быть 0 пт")
+                issues.append("Содержание – убрать интервал после")
 
             continue
 
-        # ==================================================
-        # 3. BODY (ОСНОВНОЙ ТЕКСТ)
-        # ==================================================
+        # =====================================
+        # 3. ЗАГОЛОВКИ РАЗДЕЛОВ
+        # =====================================
 
-        is_heading = (
-            is_level1_heading(text)
-            or is_subsection(text)
-            or text_upper == "СОДЕРЖАНИЕ"
-        )
-
-        # ---------- 3.1 Шрифт ----------
-        if not text.startswith(("Рисунок", "Таблица")):
-            for run in p.runs:
-                if run.font.name and run.font.name != "Times New Roman":
-                    issues.append(f"«{text[:30]}…» – шрифт должен быть Times New Roman")
-                if run.font.size and run.font.size != Pt(14):
-                    issues.append(f"«{text[:30]}…» – размер шрифта 14")
-
-        # ---------- 3.2 Межстрочный ----------
-        if not is_heading:
-            spacing = pf.line_spacing
-            if spacing and abs(spacing - 1.2) > 0.1:
-                issues.append(f"«{text[:30]}…» – интервал 1.2")
-
-        # ---------- 3.3 Заголовки ----------
         if is_level1_heading(text):
 
             if not is_bold_paragraph(p):
                 issues.append(f"«{text[:30]}…» – заголовок должен быть полужирным")
 
             if text != text.upper():
-                issues.append(f"«{text[:30]}…» – заголовок должен быть ПРОПИСНЫМ")
+                issues.append(f"«{text[:30]}…» – прописные буквы")
 
             if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"«{text[:30]}…» – выровнять по центру")
+                issues.append(f"«{text[:30]}…» – по центру")
 
             if pf.first_line_indent and pf.first_line_indent.cm != 0:
                 issues.append(f"«{text[:30]}…» – убрать отступ")
 
-            if text.endswith("."):
-                issues.append(f"«{text[:30]}…» – убрать точку")
+        # =====================================
+        # 4. ПОДРАЗДЕЛЫ
+        # =====================================
 
-            next_p = doc.paragraphs[idx + 1] if idx + 1 < len(doc.paragraphs) else None
-            if not (next_p and next_p.text.strip() == ""):
-                issues.append(f"«{text[:30]}…» – нужна пустая строка после заголовка")
-
-        # ---------- 3.4 Подразделы ----------
         if is_subsection(text):
 
             name = subsection_name(text)
@@ -167,38 +149,40 @@ def check_word_document(file):
             if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.1:
                 issues.append(f'Подраздел "{name}" – отступ 1.0 см')
 
-            if not is_bold_paragraph(p):
-                issues.append(f'Подраздел "{name}" – должен быть полужирным')
+            if prev_empty:
+                issues.append(f'Подраздел "{name}" – лишняя пустая строка')
 
-            if prev_para_empty:
-                # ищем предыдущий непустой
-                j = idx - 1
-                while j >= 0 and is_empty_paragraph(doc.paragraphs[j]):
-                    j -= 1
+        # =====================================
+        # 5. ОСНОВНОЙ ТЕКСТ
+        # =====================================
 
-                if j >= 0 and not is_level1_heading(doc.paragraphs[j].text):
-                    issues.append(f'Подраздел "{name}" – лишняя пустая строка перед заголовком')
+        is_heading = is_level1_heading(text) or is_subsection(text)
 
-        # ---------- 3.5 Основной текст ----------
         if not is_heading and not text.startswith("Рисунок"):
 
             if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.1:
                 issues.append(f'«{text[:30]}…» – отступ 1.0 см')
 
-        # ---------- 3.6 Рисунки ----------
+        # =====================================
+        # 6. РИСУНКИ
+        # =====================================
+
         if text.startswith("Рисунок"):
+
             figure_counter += 1
 
             if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                issues.append(f"Рисунок {figure_counter} – выравнивание по центру")
+                issues.append(f"Рисунок {figure_counter} – по центру")
 
             if figure_counter == 3:
                 if idx > 0 and not is_empty_paragraph(doc.paragraphs[idx - 1]):
-                    issues.append("Рисунок 3 – нужна пустая строка перед рисунком")
+                    issues.append("Рисунок 3 – пустая строка перед")
 
-        prev_para_empty = False
+        prev_empty = False
 
-    # ---------- СПИСОК ИСТОЧНИКОВ ----------
+    # =====================================
+    # 7. СПИСОК ИСТОЧНИКОВ
+    # =====================================
 
     lit_start = None
 
@@ -216,16 +200,36 @@ def check_word_document(file):
             pf = block[0].paragraph_format
 
             if pf.left_indent and abs(pf.left_indent.cm) > 0.1:
-                issues.append("Список источников – отступ слева 0 см")
+                issues.append("Список источников – отступ 0 см")
 
             if not pf.first_line_indent or abs(pf.first_line_indent.cm - 1.0) > 0.1:
                 issues.append("Список источников – отступ 1.0 см")
 
             if block[0].alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:
-                issues.append("Список источников – выравнивание по ширине")
+                issues.append("Список источников – по ширине")
 
-    # ---------- ФИНАЛ ----------
+    return issues
 
-    issues = list(dict.fromkeys(issues))
 
-    return issues or ["Ошибок не найдено"]
+# ==================================================
+# STREAMLIT ИНТЕРФЕЙС (ВАЖНО: СНАРУЖИ ФУНКЦИИ)
+# ==================================================
+
+st.set_page_config(page_title="Нормоконтроль", layout="centered")
+
+st.title("📊 Проверка Word-документа")
+
+uploaded_file = st.file_uploader("Загрузите .docx файл", type=["docx"])
+
+if uploaded_file is not None:
+
+    with st.spinner("Проверка..."):
+        result = check_word_document(uploaded_file)
+
+    st.subheader("Результаты")
+
+    if result:
+        for r in result:
+            st.write("•", r)
+    else:
+        st.success("Ошибок не найдено")
