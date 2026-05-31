@@ -383,7 +383,7 @@ def check_word_document(file):
         ]
 
     return issues
-```
+
 
 
 # ---------- ИНТЕРФЕЙС STREAMLIT ----------
