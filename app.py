@@ -68,11 +68,11 @@ def check_word_document(file):
         return None
 
     # --------------------------------------------------
-    # ПОИСК СОДЕРЖАНИЯ
+    # ПОИСК СОДЕРЖАНИЯ (гибкий, регистронезависимый)
     # --------------------------------------------------
     content_idx = None
     for i, p in enumerate(doc.paragraphs):
-        if p.text.strip().upper() == "СОДЕРЖАНИЕ":
+        if "содержание" in p.text.strip().lower():
             content_idx = i
             break
     if content_idx is None:
@@ -99,7 +99,8 @@ def check_word_document(file):
     # ОСНОВНОЙ ПРОХОД ПО АБЗАЦАМ
     # --------------------------------------------------
     figure_counter = 0
-    inside_contents = False   # ← режим содержания
+    inside_contents = False
+    in_references = False    # ← флаг для пропуска записей списка литературы
 
     for idx, p in enumerate(doc.paragraphs):
         if idx < content_idx:
@@ -129,6 +130,13 @@ def check_word_document(file):
                     )
             inside_contents = True
             continue   # заголовок содержания больше нигде не проверяем
+
+        # ---------------------------------------------
+        # Установка флага in_references
+        # ---------------------------------------------
+        if text.upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ":
+            in_references = True
+            # сам заголовок будет проверен ниже как раздел (is_level1_heading)
 
         # ---------------------------------------------
         # РЕЖИМ СОДЕРЖАНИЯ – проверка строк содержания
@@ -227,14 +235,14 @@ def check_word_document(file):
                         )
 
         # ---------------------------------------------
-        # ОСНОВНОЙ ТЕКСТ
+        # ОСНОВНОЙ ТЕКСТ (с учётом флага in_references)
         # ---------------------------------------------
         is_heading = (
             is_level1_heading(text)
             or is_subsection(text)
             or text.upper() == "СОДЕРЖАНИЕ"
         )
-        if not is_heading:
+        if not is_heading and not in_references:
             if not text.startswith("Рисунок"):
                 indent = pf.first_line_indent
                 if indent is None or abs(indent.cm - 1.0) > 0.1:
