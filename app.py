@@ -694,7 +694,8 @@ def check_word_document(file):
         
         is_level1 = is_section_header(text)
         is_subsection = False
-        is_figure = text.startswith("Рисунок")
+        # Обрабатываем подписи к рисункам (Рисунок и Рис.)
+        is_figure = text.startswith("Рисунок") or text.startswith("Рис.")
         is_table_caption = text.startswith("Таблица")
         
         if not is_level1:
@@ -759,22 +760,42 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
         
         elif is_figure:
-            figure_counter += 1
-            fig_match = re.match(r'^(Рисунок\s+\d+(?:\.\d+)?)', text)
-            fig_number = fig_match.group(1) if fig_match else f"Рисунок {figure_counter}"
+            # Определяем номер рисунка (для Рисунок или Рис.)
+            fig_match = re.match(r'^(Рисунок\s+\d+(?:\.\d+)?|Рис\.\s+\d+(?:\.\d+)?)', text)
+            fig_number = fig_match.group(0) if fig_match else f"Рисунок {figure_counter+1}"
+            # Для подсчёта (если номер не извлечён, используем счётчик)
+            if not fig_match:
+                figure_counter += 1
+                fig_number = f"Рисунок {figure_counter}"
+            else:
+                # извлекаем только цифры для счётчика, если нужно
+                num_match = re.search(r'(\d+(?:\.\d+)?)', fig_number)
+                if num_match:
+                    figure_counter += 1  # условно увеличиваем, чтобы не сбиться
+                # но точнее не будем пересчитывать, оставим как есть
             
+            # Если написано "Рис." – специальная ошибка
+            if text.startswith("Рис."):
+                auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
+            
+            # Проверки выравнивания и точки (общие для всех подписей)
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
             
             if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
                 auto_issues.append(f"{fig_number} – удалите точку в конце")
             
-            m = re.match(r'^Рисунок\s+\d+(?:\.\d+)?\s*[–\-]\s*(.+)$', text)
+            # Проверка регистра названия
+            m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–\-]\s*(.+)$', text)
             if m:
                 title = m.group(1).strip()
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
             
+            # Обязательная ручная проверка формата подписи
+            manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
+            
+            # Проверка пустой строки после рисунка
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
         
