@@ -8,7 +8,7 @@ import zipfile
 from lxml import etree
 
 # ------------------------------------------------------------
-# Вспомогательные функции (без изменений, за исключением мелких правок)
+# Вспомогательные функции (часть не изменилась)
 # ------------------------------------------------------------
 def get_effective_alignment(paragraph):
     if paragraph.alignment is not None:
@@ -402,7 +402,6 @@ def check_page_numbering(file, intro_start_idx):
     return issues
 
 def get_category_order(issue):
-    """Возвращает кортеж (приоритет, подприоритет) для сортировки."""
     if issue.startswith("Таблицы –"):
         return (4, 0)
     if issue.startswith("Рисунки –"):
@@ -477,7 +476,7 @@ def group_issues(issues_list):
         else:
             standalone.append(issue)
 
-    # Объединение ошибок рисунков, если их больше 3
+    # Объединение ошибок рисунков, если их > 3
     figure_keys = [k for k in grouped if re.match(r'^Рисунок\s+\d', k)]
     if len(figure_keys) > 3:
         all_fig_messages = []
@@ -501,9 +500,9 @@ def group_issues(issues_list):
         standalone.insert(0, combined_fig)
 
     # ---------- Объединение повторяющихся сообщений для таблиц ----------
-    # 1) «Исправьте название на «Таблица N – Название»» > 2 раз -> одна общая строка
+    # 1) «Исправьте название на «Таблица N – Название»» >= 2 раз -> общая строка
     caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
-    caption_msgs_keys = []  # список ключей, у которых есть такое сообщение
+    caption_msgs_keys = []
     for key in list(grouped.keys()):
         if key.startswith("Таблица ") and re.match(r'^Таблица\s+\d', key):
             msgs = grouped[key]
@@ -516,40 +515,45 @@ def group_issues(issues_list):
             if new_msgs:
                 grouped[key] = new_msgs
             else:
-                del grouped[key]  # если остались только caption_msg, удалим ключ, потом добавим общее
+                del grouped[key]
 
-    if len(caption_msgs_keys) > 2:
-        # Удаляем ключи, если они ещё есть
+    if len(caption_msgs_keys) >= 2:
         for k in caption_msgs_keys:
-            if k in grouped and not grouped[k]:  # пустой список
+            if k in grouped and not grouped[k]:
                 del grouped[k]
         standalone.insert(0, "Таблицы – исправьте название на «Таблица № – Название»")
     else:
-        # возвращаем сообщения обратно в grouped для единичных/двух таблиц
         for k in caption_msgs_keys:
             grouped[k].append("Исправьте название на «Таблица " + k.split()[-1] + " – Название»")
 
-    # 2) «название должно быть перед таблицей» > 2 раз -> одна общая строка
-    before_table_msg = "название должно быть перед таблицей (расположена после абзаца:"
-    before_keys = []
-    for key in list(grouped.keys()):
-        if key == "Таблица":  # ключ для таблиц без подписи теперь "Таблица"
-            msgs = grouped[key]
-            # если все сообщения начинаются с before_table_msg
-            if all(m.startswith(before_table_msg) for m in msgs):
-                before_keys.append(key)
-    if len(before_keys) > 2:
+    # 2) Сообщения «название должно быть перед таблицей» (в standalone) >= 2 -> общая строка
+    before_msgs = [issue for issue in standalone if issue.startswith("Таблица – название должно быть перед таблицей")]
+    if len(before_msgs) >= 2:
+        for msg in before_msgs:
+            standalone.remove(msg)
+        standalone.insert(0, "Таблицы – название должно быть перед таблицей")
+    # Аналогично для grouped (если там остались такие ключи) – на практике уже нет
+    before_keys = [k for k, v in grouped.items() if k == "Таблица" and any(m.startswith("название должно быть перед таблицей") for m in v)]
+    if len(before_keys) >= 2:
         for k in before_keys:
             del grouped[k]
         standalone.insert(0, "Таблицы – название должно быть перед таблицей")
-    # ----------------------------------------------------------------
+
+    # ---------- Объединение всех строк "Таблицы –" в одну ----------
+    table_common_msgs = [issue for issue in standalone if issue.startswith("Таблицы –")]
+    if len(table_common_msgs) > 1:
+        # Извлекаем части после "Таблицы –"
+        parts = [issue[len("Таблицы –"):] for issue in table_common_msgs]
+        combined = "Таблицы – " + ", ".join(parts)
+        for issue in table_common_msgs:
+            standalone.remove(issue)
+        standalone.append(combined)
 
     # Формируем плоский список авто‑ошибок
     result = []
     for issue in standalone:
         result.append(issue)
     for key, messages in grouped.items():
-        # Убираем дубликаты внутри одного ключа
         unique_msgs = list(dict.fromkeys(messages))
         if len(unique_msgs) == 1:
             if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
@@ -567,12 +571,22 @@ def group_issues(issues_list):
             else:
                 result.append(f"«{key}» – {combined}")
 
-    # СОРТИРОВКА ПО КАТЕГОРИЯМ с учётом подприоритета
     result.sort(key=lambda x: (get_category_order(x), x))
+
+    # ---------- Обработка ручных проверок ----------
+    # 1) Удаляем сообщения о формате подписей рисунков (они уже не добавляются)
+    # 2) Объединяем сообщения о продолжении/окончании таблиц, если их >= 2
+    cont_pattern = re.compile(r'^Таблица\s+(\d+(?:\.\d+)?)\s+–\s+проверьте\s+наличие\s+«Продолжение таблицы \1»\s+/\s+«Окончание таблицы \1» при переносе на следующую страницу$')
+    cont_msgs = [m for m in manual_issues if cont_pattern.match(m)]
+    if len(cont_msgs) >= 2:
+        for m in cont_msgs:
+            manual_issues.remove(m)
+        manual_issues.append("Таблицы – проверьте наличие «Продолжение таблицы» / «Окончание таблицы» при переносе на следующую страницу")
 
     if manual_issues:
         result.append("\n📋 Для проверки человеком:")
         result.extend(manual_issues)
+
     return result
 
 def get_font_size_pt(paragraph):
@@ -853,7 +867,7 @@ def check_word_document(file):
                 empty_errors = check_empty_line_before_after(doc, body_idx, para_to_body_idx.get(start_idx, 0), fig_number)
                 auto_issues.extend(empty_errors)
 
-            manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
+            # Ручная проверка рисунков убрана
 
         elif is_table_caption and not is_table_continuation(text):
             tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
@@ -863,7 +877,6 @@ def check_word_document(file):
                 table_numbers_found.append(tbl_num_float)
                 key = f"Таблица {tbl_num}"
 
-                # Единый комментарий (короткое тире)
                 if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', text):
                     auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
 
@@ -909,7 +922,6 @@ def check_word_document(file):
         first_text = list_errors[0][1]
         auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
 
-    # Проверка последовательности нумерации рисунков
     if figure_numbers_found:
         int_nums = sorted(set(int(n) for n in figure_numbers_found if n == int(n)))
         if int_nums:
@@ -921,7 +933,6 @@ def check_word_document(file):
                         auto_issues.append(f"Рисунки – пропущен рисунок {expected}")
                         break
 
-    # Последовательность таблиц – единый комментарий «неверная нумерация»
     table_seq_issues = []
     if table_numbers_found:
         int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
@@ -991,7 +1002,6 @@ def check_word_document(file):
             if bold_in_table:
                 table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
 
-            # Перенос в ручную проверку
             if len(table.rows) > 2:
                 current_tbl_index = None
                 for i, (pos, _) in enumerate(tables_in_range):
@@ -1012,7 +1022,6 @@ def check_word_document(file):
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
-            # Таблица без подписи: теперь просто «Таблица – название должно быть перед таблицей»
             prev_text = ""
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
                 elem = doc.element.body[i]
@@ -1026,7 +1035,6 @@ def check_word_document(file):
                 else "Таблица – название должно быть перед таблицей"
             )
 
-    # Сначала общее замечание по нумерации, затем остальные замечания к таблицам
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
 
