@@ -7,6 +7,9 @@ from collections import defaultdict, Counter
 import zipfile
 from lxml import etree
 
+# ------------------------------------------------------------
+# Вспомогательные функции (без изменений, за исключением мелких правок)
+# ------------------------------------------------------------
 def get_effective_alignment(paragraph):
     if paragraph.alignment is not None:
         return paragraph.alignment
@@ -400,7 +403,6 @@ def check_page_numbering(file, intro_start_idx):
 
 def get_category_order(issue):
     """Возвращает кортеж (приоритет, подприоритет) для сортировки."""
-    # Подприоритет: 0 для общих замечаний («Таблицы –», «Рисунки –»), 1 для конкретных.
     if issue.startswith("Таблицы –"):
         return (4, 0)
     if issue.startswith("Рисунки –"):
@@ -498,20 +500,66 @@ def group_issues(issues_list):
             del grouped[k]
         standalone.insert(0, combined_fig)
 
+    # ---------- Объединение повторяющихся сообщений для таблиц ----------
+    # 1) «Исправьте название на «Таблица N – Название»» > 2 раз -> одна общая строка
+    caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
+    caption_msgs_keys = []  # список ключей, у которых есть такое сообщение
+    for key in list(grouped.keys()):
+        if key.startswith("Таблица ") and re.match(r'^Таблица\s+\d', key):
+            msgs = grouped[key]
+            new_msgs = []
+            for m in msgs:
+                if caption_msg_pattern.match(m):
+                    caption_msgs_keys.append(key)
+                else:
+                    new_msgs.append(m)
+            if new_msgs:
+                grouped[key] = new_msgs
+            else:
+                del grouped[key]  # если остались только caption_msg, удалим ключ, потом добавим общее
+
+    if len(caption_msgs_keys) > 2:
+        # Удаляем ключи, если они ещё есть
+        for k in caption_msgs_keys:
+            if k in grouped and not grouped[k]:  # пустой список
+                del grouped[k]
+        standalone.insert(0, "Таблицы – исправьте название на «Таблица № – Название»")
+    else:
+        # возвращаем сообщения обратно в grouped для единичных/двух таблиц
+        for k in caption_msgs_keys:
+            grouped[k].append("Исправьте название на «Таблица " + k.split()[-1] + " – Название»")
+
+    # 2) «название должно быть перед таблицей» > 2 раз -> одна общая строка
+    before_table_msg = "название должно быть перед таблицей (расположена после абзаца:"
+    before_keys = []
+    for key in list(grouped.keys()):
+        if key == "Таблица":  # ключ для таблиц без подписи теперь "Таблица"
+            msgs = grouped[key]
+            # если все сообщения начинаются с before_table_msg
+            if all(m.startswith(before_table_msg) for m in msgs):
+                before_keys.append(key)
+    if len(before_keys) > 2:
+        for k in before_keys:
+            del grouped[k]
+        standalone.insert(0, "Таблицы – название должно быть перед таблицей")
+    # ----------------------------------------------------------------
+
     # Формируем плоский список авто‑ошибок
     result = []
     for issue in standalone:
         result.append(issue)
     for key, messages in grouped.items():
-        if len(messages) == 1:
+        # Убираем дубликаты внутри одного ключа
+        unique_msgs = list(dict.fromkeys(messages))
+        if len(unique_msgs) == 1:
             if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
-                result.append(f"{key} – {messages[0]}")
+                result.append(f"{key} – {unique_msgs[0]}")
             elif key.startswith("Рисунок ") or key.startswith("Таблица ") or key == "Нумерация страниц":
-                result.append(f"{key} – {messages[0]}")
+                result.append(f"{key} – {unique_msgs[0]}")
             else:
-                result.append(f"«{key}» – {messages[0]}")
+                result.append(f"«{key}» – {unique_msgs[0]}")
         else:
-            combined = "; ".join(messages)
+            combined = "; ".join(unique_msgs)
             if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
                 result.append(f"{key} – {combined}")
             elif key.startswith("Рисунок ") or key.startswith("Таблица ") or key == "Нумерация страниц":
@@ -815,9 +863,9 @@ def check_word_document(file):
                 table_numbers_found.append(tbl_num_float)
                 key = f"Таблица {tbl_num}"
 
-                # Единый комментарий о тире/названии
-                if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+—\s+\S', text):
-                    auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} — Название»")
+                # Единый комментарий (короткое тире)
+                if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', text):
+                    auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
 
                 if text.rstrip().endswith("."):
                     auto_issues.append(f"{key} – удалите точку в конце названия")
@@ -964,7 +1012,7 @@ def check_word_document(file):
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
-            # Таблица без подписи
+            # Таблица без подписи: теперь просто «Таблица – название должно быть перед таблицей»
             prev_text = ""
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
                 elem = doc.element.body[i]
@@ -974,9 +1022,8 @@ def check_word_document(file):
                         prev_text = txt[:50]
                         break
             table_issues.append(
-                f"Таблица без подписи – название таблицы должно быть перед таблицей "
-                f"(расположена после абзаца: «{prev_text}…»)" if prev_text
-                else "Таблица без подписи – название таблицы должно быть перед таблицей"
+                f"Таблица – название должно быть перед таблицей (расположена после абзаца: «{prev_text}…»)" if prev_text
+                else "Таблица – название должно быть перед таблицей"
             )
 
     # Сначала общее замечание по нумерации, затем остальные замечания к таблицам
