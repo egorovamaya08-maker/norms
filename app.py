@@ -613,30 +613,30 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
     return errors
 
 # Новая функция: проверяет наличие разрыва страницы/раздела перед указанным элементом body
-def is_on_new_page(doc, body_idx, start_body_pos=0):
+def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
     """
     Проверяет, что элемент с индексом body_idx в body документа
-    находится на новой странице.
+    находится на новой странице (с учётом разрыва раздела, явного
+    разрыва страницы или большого количества пустых параграфов).
     """
     body_elems = list(doc.element.body)
-    # Если это самый первый элемент — он всегда на новой странице
     if body_idx == start_body_pos:
         return True
 
-    # Идём назад, пропуская пустые параграфы
+    blank_count = 0  # счётчик подряд идущих пустых параграфов
+
     for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
 
-        # --- 1. Прямой потомок body: <w:sectPr> (только последний раздел) ---
+        # --- 1. Прямой sectPr в body (последний раздел) ---
         if elem.tag == qn('w:sectPr'):
-            # Последний sectPr в документе — это не разрыв перед чем-то
             if i == len(body_elems) - 1:
                 continue
             type_el = elem.find(qn('w:type'))
             val = type_el.get(qn('w:val')) if type_el is not None else None
             if val == 'continuous':
-                continue          # непрерывный разрыв — ищем дальше
-            # nextPage, evenPage, oddPage или отсутствие типа = разрыв страницы
+                continue
+            # nextPage, evenPage, oddPage или без типа → разрыв страницы
             return True
 
         # --- 2. Параграф ---
@@ -646,33 +646,30 @@ def is_on_new_page(doc, body_idx, start_body_pos=0):
                 if br.get(qn('w:type')) == 'page':
                     return True
 
-            # 2b. Разрыв раздела внутри w:pPr/w:sectPr
+            # 2b. Разрыв раздела внутри w:pPr
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 sectPr = pPr.find(qn('w:sectPr'))
                 if sectPr is not None:
                     type_el = sectPr.find(qn('w:type'))
                     val = type_el.get(qn('w:val')) if type_el is not None else None
-                    if val == 'continuous':
-                        # непрерывный разрыв, НЕ начинает новую страницу,
-                        # но сам параграф мог быть непустым — проверяем текст
-                        pass
-                    else:
-                        # nextPage, evenPage, oddPage или отсутствует — это разрыв
+                    if val != 'continuous':   # nextPage и т.п. или отсутствие
                         return True
 
-            # 2c. Проверка на непустой параграф
-            # Если параграф содержит текст, картинку и т.п. — дальше разрыва нет
+            # 2c. Параграф не пуст?
             if has_content(elem):
-                return False
-            # иначе параграф пустой — пропускаем, идём дальше
+                # нашли контент – проверяем, хватило ли пустых строк для переноса
+                return blank_count >= min_empty_paragraphs
+            else:
+                # пустой параграф – запоминаем и идём дальше
+                blank_count += 1
+                continue
 
         # --- 3. Таблица ---
         if elem.tag == qn('w:tbl'):
-            # Таблица считается контентом, перед которым нет разрыва
-            return False
+            return blank_count >= min_empty_paragraphs
 
-    # Дошли до начала и не встретили ни контента, ни разрыва
+    # если дошли до начала, не встретив контента – заголовок на новой странице
     return True
 
 def has_content(elem):
