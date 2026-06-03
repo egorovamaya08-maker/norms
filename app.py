@@ -534,6 +534,41 @@ def group_issues(issues_list):
         result.extend(manual_issues)
     return result
 
+def get_font_size_pt(paragraph):
+    """Возвращает множество размеров шрифта в пунктах для абзаца."""
+    sizes = set()
+    for run in paragraph.runs:
+        if run.font.size:
+            sizes.add(run.font.size.pt)
+    return sizes
+
+def check_empty_line_before_after(doc, idx, start_idx, label):
+    """Проверяет наличие пустых строк до и после элемента с индексом idx.
+       Возвращает список ошибок."""
+    errors = []
+    body_elems = list(doc.element.body)
+    # Проверка ДО
+    if idx > start_idx:
+        prev_elem = body_elems[idx - 1]
+        # Пустая строка – это параграф без текста
+        is_empty_prev = (
+            prev_elem.tag == qn('w:p') and
+            not prev_elem.xpath('string(.)').strip()
+        )
+        if not is_empty_prev:
+            errors.append(f"{label} – добавьте пустую строку перед подписью")
+    # Проверка ПОСЛЕ
+    if idx + 1 < len(body_elems):
+        next_elem = body_elems[idx + 1]
+        is_empty_next = (
+            next_elem.tag == qn('w:p') and
+            not next_elem.xpath('string(.)').strip()
+        )
+        if not is_empty_next:
+            errors.append(f"{label} – добавьте пустую строку после подписи")
+    return errors
+
+
 def check_word_document(file):
     doc = docx.Document(file)
     auto_issues = []
@@ -613,8 +648,17 @@ def check_word_document(file):
     list_errors = []
     indent_issues = []
 
-    figure_numbers_found = []      # для проверки последовательности
-    table_numbers_found = []       # для проверки последовательности
+    figure_numbers_found = []
+    table_numbers_found = []
+
+    # Сопоставляем индексы параграфов с индексами body-элементов
+    para_to_body_idx = {}
+    for i, elem in enumerate(doc.element.body):
+        if elem.tag == qn('w:p'):
+            for j, p in enumerate(doc.paragraphs):
+                if p._element is elem:
+                    para_to_body_idx[j] = i
+                    break
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -749,7 +793,7 @@ def check_word_document(file):
             if text.startswith("Рис."):
                 auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
             if re.match(r'Рисунок\s*:', text):
-                auto_issues.append(f"{fig_number} – замените двоеточие на тире")
+                auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
             # Проверка наличия тире после номера (если это не двоеточие, которое уже обработано)
             if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', text) and not re.match(r'Рисунок\s*:', text):
                 auto_issues.append(f"{fig_number} – должно быть тире после номера")
@@ -763,28 +807,42 @@ def check_word_document(file):
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
 
-            # Пустые строки до и после
-            if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
-                auto_issues.append(f"{fig_number} – добавьте пустую строку перед подписью рисунка")
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                auto_issues.append(f"{fig_number} – добавьте пустую строку после подписи рисунка")
+            # Размер шрифта
+            sizes = get_font_size_pt(p)
+            if sizes:
+                if any(abs(s - 14) > 0.5 for s in sizes):
+                    auto_issues.append(f"{fig_number} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
+
+            # Проверка пустых строк (по элементам body)
+            body_idx = para_to_body_idx.get(idx)
+            if body_idx is not None:
+                empty_errors = check_empty_line_before_after(doc, body_idx, para_to_body_idx.get(start_idx, 0), fig_number)
+                auto_issues.extend(empty_errors)
 
             manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
 
         elif is_table_caption:
-            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
-            if tbl_match:
-                tbl_num = tbl_match.group(1)
-                table_numbers_found.append(float(tbl_num))
-                key = f"Таблица {tbl_num}"
-                # Проверки формата подписи таблицы
-                if re.match(r'Таблица\s*:', text):
-                    auto_issues.append(f"{key} – замените двоеточие на тире")
-                if not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[–—]', text):
-                    auto_issues.append(f"{key} – должно быть «Таблица {tbl_num} — Название»")
-                if text.rstrip().endswith("."):
-                    auto_issues.append(f"{key} – удалите точку в конце названия")
-            # Дальнейшие проверки (пустые строки относительно таблицы) будут в разделе 6
+            # Убедимся, что это не "Продолжение таблицы..."
+            if not is_table_continuation(text):
+                tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
+                if tbl_match:
+                    tbl_num = tbl_match.group(1)
+                    table_numbers_found.append(float(tbl_num))
+                    key = f"Таблица {tbl_num}"
+                    # Проверки формата подписи таблицы
+                    if re.match(r'Таблица\s*:', text):
+                        auto_issues.append(f"{key} – замените двоеточие на тире (формат: «Таблица N — Название»)")
+                    if not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[–—]', text):
+                        auto_issues.append(f"{key} – должно быть «Таблица {tbl_num} — Название»")
+                    if text.rstrip().endswith("."):
+                        auto_issues.append(f"{key} – удалите точку в конце названия")
+                    # Размер шрифта
+                    sizes = get_font_size_pt(p)
+                    if sizes:
+                        if any(abs(s - 14) > 0.5 for s in sizes):
+                            auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
+                    # Пустые строки будут проверены в блоке таблиц (раздел 6)
+            # иначе это "Продолжение таблицы" – попадает в is_table_continuation выше
 
         else:
             # ОБЫЧНЫЙ АБЗАЦ
@@ -880,21 +938,13 @@ def check_word_document(file):
             tbl_num_match = re.match(r'Таблица\s+([\d.]+)', caption)
             tbl_num = tbl_num_match.group(1) if tbl_num_match else str(t_idx)
             key = f"Таблица {tbl_num}"
-            # Оставляем только проверки расположения
-            if cap_pos is not None and cap_pos > start_idx:
-                if not is_empty_paragraph(doc.paragraphs[cap_pos - 1]):
-                    auto_issues.append(f"{key} – добавьте пустую строку перед подписью таблицы")
-            next_para = None
-            for i in range(tbl_pos + 1, end_body_pos):
-                elem = doc.element.body[i]
-                if elem.tag.endswith('p'):
-                    for para in doc.paragraphs:
-                        if para._element is elem:
-                            next_para = para
-                            break
-                    break
-            if next_para and not is_empty_paragraph(next_para):
-                manual_checks.append(f"{key} – проверьте наличие пустой строки после таблицы")
+            # Проверка пустых строк (по элементам body)
+            if cap_pos is not None:
+                empty_errors = check_empty_line_before_after(doc, cap_pos, start_body_pos, key)
+                auto_issues.extend(empty_errors)
+            else:
+                # если подпись не найдена, возможно, таблица без подписи
+                pass
         else:
             auto_issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
 
@@ -964,6 +1014,7 @@ def check_word_document(file):
         all_issues.append("📋 Для проверки человеком:")
         all_issues.extend(manual_checks)
     return group_issues(all_issues)
+    
 # Интерфейс
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
 st.title("📊 Автоматическая проверка документов Word")
