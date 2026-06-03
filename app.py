@@ -500,7 +500,6 @@ def group_issues(issues_list):
         standalone.insert(0, combined_fig)
 
     # ---------- Объединение повторяющихся сообщений для таблиц ----------
-    # 1) «Исправьте название на «Таблица N – Название»» >= 2 раз -> общая строка
     caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
     caption_msgs_keys = []
     for key in list(grouped.keys()):
@@ -532,7 +531,6 @@ def group_issues(issues_list):
         for msg in before_msgs:
             standalone.remove(msg)
         standalone.insert(0, "Таблицы – название должно быть перед таблицей")
-    # Аналогично для grouped (если там остались такие ключи) – на практике уже нет
     before_keys = [k for k, v in grouped.items() if k == "Таблица" and any(m.startswith("название должно быть перед таблицей") for m in v)]
     if len(before_keys) >= 2:
         for k in before_keys:
@@ -542,7 +540,6 @@ def group_issues(issues_list):
     # ---------- Объединение всех строк "Таблицы –" в одну ----------
     table_common_msgs = [issue for issue in standalone if issue.startswith("Таблицы –")]
     if len(table_common_msgs) > 1:
-        # Извлекаем части после "Таблицы –"
         parts = [issue[len("Таблицы –"):] for issue in table_common_msgs]
         combined = "Таблицы – " + ", ".join(parts)
         for issue in table_common_msgs:
@@ -573,9 +570,7 @@ def group_issues(issues_list):
 
     result.sort(key=lambda x: (get_category_order(x), x))
 
-    # ---------- Обработка ручных проверок ----------
-    # 1) Удаляем сообщения о формате подписей рисунков (они уже не добавляются)
-    # 2) Объединяем сообщения о продолжении/окончании таблиц, если их >= 2
+    # Обработка ручных проверок
     cont_pattern = re.compile(r'^Таблица\s+(\d+(?:\.\d+)?)\s+–\s+проверьте\s+наличие\s+«Продолжение таблицы \1»\s+/\s+«Окончание таблицы \1» при переносе на следующую страницу$')
     cont_msgs = [m for m in manual_issues if cont_pattern.match(m)]
     if len(cont_msgs) >= 2:
@@ -616,6 +611,44 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
         if not is_empty_next:
             errors.append(f"{label} – добавьте пустую строку после подписи")
     return errors
+
+# Новая функция: проверяет наличие разрыва страницы/раздела перед указанным элементом body
+def has_page_break_before(doc, body_idx, start_body_pos):
+    """
+    Идём от body_idx-1 до start_body_pos (включая) и ищем:
+    - явный разрыв страницы в параграфе (w:br с type="page")
+    - элемент w:sectPr с типом nextPage/evenPage/oddPage (разрыв раздела)
+    Пропускаем пустые параграфы (без текста).
+    Если до того, как встретили непустой параграф/таблицу, найден разрыв – возвращаем True.
+    Если дошли до непустого контента без разрыва – False.
+    """
+    body_elems = list(doc.element.body)
+    for i in range(body_idx - 1, start_body_pos - 1, -1):
+        elem = body_elems[i]
+        # Проверяем разрыв раздела (sectPr)
+        if elem.tag == qn('w:sectPr'):
+            # Извлекаем тип разрыва
+            type_elem = elem.find(qn('w:type'))
+            if type_elem is not None:
+                val = type_elem.get(qn('w:val'))
+                if val in ('nextPage', 'evenPage', 'oddPage'):
+                    return True
+            # Даже если тип не указан, иногда разрыв раздела подразумевает новую страницу? Будем считать, что нужен явный атрибут
+        # Проверяем параграф на разрыв страницы
+        if elem.tag == qn('w:p'):
+            # Ищем w:br с type="page"
+            for br in elem.findall('.//w:br', {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+                if br.get(qn('w:type')) == 'page':
+                    return True
+            # Если параграф не пустой (есть текст), значит дошли до контента без разрыва
+            text = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
+            if text:
+                return False
+        # Если это таблица (w:tbl) без предшествующего разрыва, тоже считаем контентом
+        if elem.tag == qn('w:tbl'):
+            return False
+    # Если дошли до start_body_pos и не встретили ни контента, ни разрыва – считаем, что разрыва нет
+    return False
 
 def check_word_document(file):
     doc = docx.Document(file)
@@ -700,7 +733,8 @@ def check_word_document(file):
     table_numbers_found = []
 
     para_to_body_idx = {}
-    for i, elem in enumerate(doc.element.body):
+    body_elems = list(doc.element.body)
+    for i, elem in enumerate(body_elems):
         if elem.tag == qn('w:p'):
             for j, p in enumerate(doc.paragraphs):
                 if p._element is elem:
@@ -708,6 +742,12 @@ def check_word_document(file):
                     break
 
     table_captions_info = []
+
+    # Получаем start_body_pos – индекс элемента "ВВЕДЕНИЕ" или первого раздела
+    try:
+        start_body_pos = para_to_body_idx[start_idx]
+    except:
+        start_body_pos = 0
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -787,18 +827,12 @@ def check_word_document(file):
 
         if is_level1:
             key = text[:80]
-            if text.upper() != "ВВЕДЕНИЕ" or idx != start_idx:
-                page_break = False
-                if idx > start_idx:
-                    prev_p = doc.paragraphs[idx - 1]
-                    for run in prev_p.runs:
-                        if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                            page_break = True
-                for run in p.runs:
-                    if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                        page_break = True
-                if not page_break:
-                    auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
+            # Проверка новой страницы для всех разделов, кроме "ВВЕДЕНИЕ" (оно уже в начале)
+            if text.upper() != "ВВЕДЕНИЕ":
+                body_idx = para_to_body_idx.get(idx)
+                if body_idx is not None:
+                    if not has_page_break_before(doc, body_idx, start_body_pos):
+                        auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка")
@@ -864,10 +898,8 @@ def check_word_document(file):
 
             body_idx = para_to_body_idx.get(idx)
             if body_idx is not None:
-                empty_errors = check_empty_line_before_after(doc, body_idx, para_to_body_idx.get(start_idx, 0), fig_number)
+                empty_errors = check_empty_line_before_after(doc, body_idx, start_body_pos, fig_number)
                 auto_issues.extend(empty_errors)
-
-            # Ручная проверка рисунков убрана
 
         elif is_table_caption and not is_table_continuation(text):
             tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
@@ -941,16 +973,12 @@ def check_word_document(file):
                 table_seq_issues.append("Таблицы – неверная нумерация")
 
     # ---------- 6. ТАБЛИЦЫ ----------
-    try:
-        start_element = doc.paragraphs[start_idx]._element
-        start_body_pos = list(doc.element.body).index(start_element)
-    except:
-        start_body_pos = 0
-    end_body_pos = len(doc.element.body)
+    # start_body_pos уже определено ранее
+    end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
             lit_element = doc.paragraphs[lit_start]._element
-            end_body_pos = list(doc.element.body).index(lit_element)
+            end_body_pos = body_elems.index(lit_element)
         except:
             pass
 
@@ -959,7 +987,7 @@ def check_word_document(file):
         if get_table_depth(table) > 0:
             continue
         try:
-            tbl_pos = list(doc.element.body).index(table._element)
+            tbl_pos = body_elems.index(table._element)
         except:
             continue
         if not (start_body_pos < tbl_pos < end_body_pos):
@@ -1024,7 +1052,7 @@ def check_word_document(file):
         else:
             prev_text = ""
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                elem = doc.element.body[i]
+                elem = body_elems[i]
                 if elem.tag == qn('w:p'):
                     txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
                     if txt:
