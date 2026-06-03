@@ -68,16 +68,38 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    if text.upper().strip() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
+    # Удаляем абсолютно все невидимые символы категории Cf (Format)
+    # и заменяем любые пробельные символы (включая неразрывные, тонкие и т.д.) на обычный пробел
+    import unicodedata
+    cleaned = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == 'Cf':          # невидимки (zero-width space, BOM и т.п.)
+            continue
+        if ch.isspace():         # любой пробельный символ → обычный пробел
+            cleaned.append(' ')
+        else:
+            cleaned.append(ch)
+    cleaned_text = ''.join(cleaned).strip()
+
+    if not cleaned_text:
+        return False
+
+    # Проверка на специальные названия
+    if cleaned_text.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
-    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
+    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned_text, re.IGNORECASE):
         return True
-    # Полагаемся на уже нормализованный текст
-    if re.match(r'^\d+\.\s+[А-ЯЁ]', text):
-        clean = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
-        if clean:
-            upper_count = sum(1 for c in clean if c.isupper())
-            return upper_count >= len(clean) * 0.8
+
+    # Основной критерий: номер с точкой + заглавные буквы
+    if re.match(r'^\d+\.\s+[А-ЯЁ]', cleaned_text):
+        # Подсчёт доли заглавных букв после удаления «технических» символов
+        clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned_text)
+        if not clean_letters:
+            return False
+        upper_count = sum(1 for c in clean_letters if c.isupper())
+        return upper_count >= len(clean_letters) * 0.8
+
     return False
 
     # Нормализация пробельных символов (неразрывный, тонкий и т.п.)
@@ -799,7 +821,14 @@ def check_word_document(file):
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
-        norm_text = text.replace('\u00A0', ' ').replace('\u202F', ' ').replace('\t', ' ')
+        
+        import unicodedata
+        _cleaned = []
+        for ch in text:
+            if unicodedata.category(ch) == 'Cf':
+                continue
+            _cleaned.append(' ' if ch.isspace() else ch)
+        norm_text = ''.join(_cleaned).strip()
 
         if not text:
             prev_para_empty = True
