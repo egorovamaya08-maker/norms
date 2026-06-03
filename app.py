@@ -615,39 +615,44 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
 # Новая функция: проверяет наличие разрыва страницы/раздела перед указанным элементом body
 def has_page_break_before(doc, body_idx, start_body_pos):
     """
-    Идём от body_idx-1 до start_body_pos (включая) и ищем:
-    - явный разрыв страницы в параграфе (w:br с type="page")
-    - элемент w:sectPr с типом nextPage/evenPage/oddPage (разрыв раздела)
-    Пропускаем пустые параграфы (без текста).
-    Если до того, как встретили непустой параграф/таблицу, найден разрыв – возвращаем True.
-    Если дошли до непустого контента без разрыва – False.
+    Ищет явный разрыв страницы или раздела перед элементом с индексом body_idx.
+    Пропускает пустые параграфы.
     """
     body_elems = list(doc.element.body)
+    total = len(body_elems)
     for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
-        # Проверяем разрыв раздела (sectPr)
+
+        # Проверка разрыва раздела (sectPr)
         if elem.tag == qn('w:sectPr'):
-            # Извлекаем тип разрыва
-            type_elem = elem.find(qn('w:type'))
-            if type_elem is not None:
-                val = type_elem.get(qn('w:val'))
-                if val in ('nextPage', 'evenPage', 'oddPage'):
-                    return True
-            # Даже если тип не указан, иногда разрыв раздела подразумевает новую страницу? Будем считать, что нужен явный атрибут
-        # Проверяем параграф на разрыв страницы
+            # последний sectPr в документе не является разрывом
+            if i < total - 1:
+                type_elem = elem.find(qn('w:type'))
+                if type_elem is not None:
+                    val = type_elem.get(qn('w:val'))
+                    if val == 'continuous':
+                        # непрерывный разрыв не начинает новую страницу
+                        continue
+                # отсутствие типа или тип nextPage/evenPage/oddPage – это разрыв страницы
+                return True
+            else:
+                # Это последний sectPr в body, игнорируем
+                continue
+
+        # Проверка разрыва страницы внутри параграфа
         if elem.tag == qn('w:p'):
-            # Ищем w:br с type="page"
             for br in elem.findall('.//w:br', {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
                 if br.get(qn('w:type')) == 'page':
                     return True
-            # Если параграф не пустой (есть текст), значит дошли до контента без разрыва
+            # Если параграф не пуст, дальше не идём – разрыва нет
             text = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
             if text:
                 return False
-        # Если это таблица (w:tbl) без предшествующего разрыва, тоже считаем контентом
+
+        # Таблица без предшествующего разрыва – контент
         if elem.tag == qn('w:tbl'):
             return False
-    # Если дошли до start_body_pos и не встретили ни контента, ни разрыва – считаем, что разрыва нет
+
     return False
 
 def check_word_document(file):
