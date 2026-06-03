@@ -1,13 +1,42 @@
 import streamlit as st
 import docx
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 import re
 from collections import defaultdict, Counter
 import zipfile
 from lxml import etree
+import unicodedata
 
 NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+
+# ------------------------------------------------------------
+# Нормализация текста: удаление невидимок, замена пробелов
+# ------------------------------------------------------------
+def normalize_text(text):
+    """Удаляет невидимые символы (категория Cf) с вставкой пробела,
+    заменяет все пробельные символы на обычный пробел."""
+    if not text:
+        return text
+    result = []
+    prev_digit = False
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == 'Cf':          # невидимка
+            # Если предыдущий символ был цифрой, а следующий – буквой,
+            # вставим пробел (этот случай мы обработаем при следующем символе)
+            prev_digit = ch.isdigit() if not result else result[-1].isdigit()
+            continue
+        if ch.isspace():
+            result.append(' ')
+        else:
+            # Проверяем, не нужно ли вставить пробел перед буквой, если перед этим была цифра
+            if result and result[-1].isdigit() and ch.isalpha():
+                # Между цифрой и буквой должен быть пробел
+                result.append(' ')
+            result.append(ch)
+    # Удаляем лишние пробелы
+    return re.sub(r'\s+', ' ', ''.join(result)).strip()
 
 # ------------------------------------------------------------
 # Вспомогательные функции
@@ -68,51 +97,22 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    # Удаляем абсолютно все невидимые символы категории Cf (Format)
-    # и заменяем любые пробельные символы (включая неразрывные, тонкие и т.д.) на обычный пробел
-    import unicodedata
-    cleaned = []
-    for ch in text:
-        cat = unicodedata.category(ch)
-        if cat == 'Cf':          # невидимки (zero-width space, BOM и т.п.)
-            continue
-        if ch.isspace():         # любой пробельный символ → обычный пробел
-            cleaned.append(' ')
-        else:
-            cleaned.append(ch)
-    cleaned_text = ''.join(cleaned).strip()
-
-    if not cleaned_text:
+    """Проверяет, является ли текст заголовком раздела первого уровня."""
+    cleaned = normalize_text(text)
+    if not cleaned:
         return False
-
-    # Проверка на специальные названия
-    if cleaned_text.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
+    if cleaned.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
-    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned_text, re.IGNORECASE):
+    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
         return True
-
     # Основной критерий: номер с точкой + заглавные буквы
-    if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned_text):
-        # Подсчёт доли заглавных букв после удаления «технических» символов
-        clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned_text)
+    # \s* допускает отсутствие пробела после номера (если невидимка уже удалена)
+    if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned):
+        clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
         if not clean_letters:
             return False
         upper_count = sum(1 for c in clean_letters if c.isupper())
         return upper_count >= len(clean_letters) * 0.8
-
-    return False
-
-    # Нормализация пробельных символов (неразрывный, тонкий и т.п.)
-    normalized = text.replace('\u00A0', ' ').replace('\u202F', ' ').replace('\u2009', ' ')
-
-    if re.match(r'^\d+\.\s+[А-ЯЁ]', normalized):
-        # Очистку от спецсимволов делаем по исходному text,
-        # чтобы не потерять буквы, которые могут быть в оригинале
-        clean = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
-        if not clean:
-            return False
-        upper_count = sum(1 for c in clean if c.isupper())
-        return upper_count >= len(clean) * 0.8
     return False
 
 def normalize_title(text):
@@ -288,15 +288,6 @@ def get_table_depth(table):
             depth += 1
         parent = parent.getparent()
     return depth
-
-def find_nearest_caption(doc, tbl_pos, start_body_pos):
-    for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-        elem = doc.element.body[i]
-        if elem.tag.endswith('p'):
-            for para in doc.paragraphs:
-                if para._element is elem and para.text.strip():
-                    return para.text.strip(), i
-    return None, None
 
 def is_formula_or_equation(text):
     if re.search(r'[=≠≤≥±×÷∫∑∏√∞∂∇∈∉⊂⊃∪∩]', text):
@@ -744,7 +735,8 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        if re.match(r'^\d+\.\s+[А-Яа-я]', txt.replace('\u00A0', ' ')) and not is_section_header(txt.replace('\u00A0', ' ')):
+        # Пропускаем нумерованные строки, которые не являются разделами
+        if re.match(r'^\d+\.\s*[А-Яа-я]', normalize_text(txt)) and not is_section_header(txt):
             continue
         if is_section_header(txt):
             start_idx = i
@@ -821,14 +813,8 @@ def check_word_document(file):
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
-        
-        import unicodedata
-        _cleaned = []
-        for ch in text:
-            if unicodedata.category(ch) == 'Cf':
-                continue
-            _cleaned.append(' ' if ch.isspace() else ch)
-        norm_text = ''.join(_cleaned).strip()
+        # Единая нормализация через нашу функцию
+        norm_text = normalize_text(text)
 
         if not text:
             prev_para_empty = True
@@ -842,7 +828,8 @@ def check_word_document(file):
             prev_para_empty = False
             continue
 
-        if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_section_header(norm_text):
+        # Пропускаем нумерованные строки, не являющиеся разделами (например, "1.2. текст")
+        if re.match(r'^\d+\.\s*[А-Яа-я]', norm_text) and not is_section_header(norm_text):
             prev_para_empty = False
             continue
 
@@ -893,14 +880,14 @@ def check_word_document(file):
 
         is_level1 = is_section_header(norm_text)
         is_subsection = False
-        is_figure = text.startswith("Рисунок") or text.startswith("Рис.")
-        is_table_caption = text.startswith("Таблица")
+        is_figure = norm_text.startswith("Рисунок") or norm_text.startswith("Рис.")
+        is_table_caption = norm_text.startswith("Таблица")
 
         if not is_level1:
             if re.match(r'^\d+\.\d+(\.\d+)?\s*[А-Яа-я]', norm_text):
                 is_subsection = True
             else:
-                normalized = normalize_title(text)
+                normalized = normalize_title(norm_text)
                 in_toc = any(normalize_title(e) == normalized for e in toc_entries) if toc_entries else False
                 if in_toc and len(text) > 20:
                     is_subsection = True
@@ -917,7 +904,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка")
             if not is_paragraph_bold(p):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть полужирным")
-            if re.match(r'^\d+\.', text) and not is_all_caps(text):
+            if re.match(r'^\d+\.', norm_text) and not is_all_caps(norm_text):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть прописными буквами")
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
@@ -927,7 +914,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
 
         elif is_subsection:
-            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', norm_text).strip()
+            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
@@ -943,7 +930,7 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         elif is_figure:
-            num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', text)
+            num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', norm_text)
             if num_match:
                 fig_num = num_match.group(1)
                 figure_numbers_found.append(float(fig_num))
@@ -952,12 +939,12 @@ def check_word_document(file):
                 fig_num = str(figure_counter)
             fig_number = f"Рисунок {fig_num}"
 
-            if text.startswith("Рис."):
+            if norm_text.startswith("Рис."):
                 auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
-            if re.match(r'Рисунок\s*:', text):
+            if re.match(r'Рисунок\s*:', norm_text):
                 auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
-            if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', text) and not re.match(r'Рисунок\s*:', text):
-                if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', text):
+            if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
+                if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
                     auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
                 else:
                     auto_issues.append(f"{fig_number} – должно быть тире после номера")
@@ -965,7 +952,7 @@ def check_word_document(file):
                 auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
             if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
                 auto_issues.append(f"{fig_number} – удалите точку в конце")
-            m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', text)
+            m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', norm_text)
             if m:
                 title = m.group(1).strip()
                 if title and title[0].islower():
@@ -981,15 +968,15 @@ def check_word_document(file):
                 empty_errors = check_empty_line_before_after(doc, body_idx, start_body_pos, fig_number)
                 auto_issues.extend(empty_errors)
 
-        elif is_table_caption and not is_table_continuation(text):
-            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
+        elif is_table_caption and not is_table_continuation(norm_text):
+            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
             if tbl_match:
                 tbl_num = tbl_match.group(1)
                 tbl_num_float = float(tbl_num)
                 table_numbers_found.append(tbl_num_float)
                 key = f"Таблица {tbl_num}"
 
-                if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', text):
+                if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
                     auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
 
                 if text.rstrip().endswith("."):
@@ -1009,7 +996,7 @@ def check_word_document(file):
                 })
 
         else:
-            key = text[:50]
+            key = norm_text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
                 indent_issues.append((key, first_line))
