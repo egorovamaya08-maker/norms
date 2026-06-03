@@ -776,8 +776,6 @@ def check_word_document(file):
     figure_counter = 0
     prev_para_empty = False
     prev_was_formula = False
-    prev_was_section_header = False
-    prev_was_subsection = False          # новое
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
     indent_issues = []
@@ -800,8 +798,8 @@ def check_word_document(file):
         start_body_pos = para_to_body_idx[start_idx]
     except:
         start_body_pos = 0
-   
-    prev_block_type = None  # section, subsection, text
+
+    prev_block_type = None          # 'section', 'subsection' или 'text'
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
@@ -831,21 +829,19 @@ def check_word_document(file):
                 if in_toc and len(text) > 20:
                     is_subsection = True
 
-        # ==================== ИСПРАВЛЕНИЕ 1 ====================
-        # Правильное обновление флагов
-        current_block_type = "text"
-        if is_level1:    
+        # Определяем тип текущего блока (раздел, подраздел, текст)
+        if is_level1:
             current_block_type = "section"
         elif is_subsection:
             current_block_type = "subsection"
+        else:
+            current_block_type = "text"
 
-        # ==================== ИСПРАВЛЕНИЕ 2 ====================
-        # Проверка отступа только для основного текста (не заголовков)
+        # ================== ПРОВЕРКА ОСНОВНОГО ТЕКСТА ==================
         if not is_level1 and not is_subsection:
-            # Проверка списков, продолжения таблиц, формул и т.д.
+            # Списки
             is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
             if is_list:
-                # ... обработка списков ...
                 if not marker_valid:
                     if list_errors and idx == list_errors[-1][0] + 1:
                         list_errors.append((idx, text, marker_type))
@@ -868,6 +864,7 @@ def check_word_document(file):
                 auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
                 list_errors = []
 
+            # Продолжение таблицы
             if is_table_continuation(norm_text):
                 first_line = get_effective_first_line_indent(p)
                 if abs(first_line) > 0.1:
@@ -875,6 +872,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
+            # Формулы
             if is_formula_where_line(norm_text):
                 errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
                 auto_issues.extend(errors)
@@ -886,12 +884,11 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
-            # Проверка рисунков
+            # Рисунки
             is_figure = norm_text.startswith("Рисунок") or norm_text.startswith("Рис.")
             is_table_caption = norm_text.startswith("Таблица")
 
             if is_figure:
-                # ... (код проверки рисунков без изменений)
                 num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', norm_text)
                 if num_match:
                     fig_num = num_match.group(1)
@@ -939,7 +936,7 @@ def check_word_document(file):
                     tbl_num_float = float(tbl_num)
                     try:
                         table_numbers_found.append(int(tbl_num))
-                    except:    
+                    except:
                         pass
                     key = f"Таблица {tbl_num}"
 
@@ -964,7 +961,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
-            # Основной текст (не заголовок, не список, не формула, не подпись)
+            # Обычный текст (не заголовок, не список, не подпись)
             key = norm_text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
@@ -972,7 +969,7 @@ def check_word_document(file):
             if p.paragraph_format.space_before and p.paragraph_format.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
 
-        # === Проверка заголовков ===
+        # ================== ПРОВЕРКА ЗАГОЛОВКОВ ==================
         if is_level1:
             key = text[:80]
             if text.upper() != "ВВЕДЕНИЕ":
@@ -1005,19 +1002,17 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            # ==================== ИСПРАВЛЕНИЕ 3 ====================
-            # Пустая строка допустима сразу после раздела
+            # Пустая строка допустима только сразу после раздела
             if prev_para_empty and prev_block_type != "section":
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
-        # Сброс флагов для следующей итерации
+        # Обновление состояния для следующей итерации
         prev_block_type = current_block_type
         if text:
             prev_para_empty = False
             prev_was_formula = False
         else:
             prev_para_empty = True
-        # не сбрасываем prev_was_section_header / prev_was_subsection — они обновлены выше
 
     # --- ЗАВЕРШАЮЩИЕ ПРОВЕРКИ ---
     if indent_issues:
@@ -1046,18 +1041,18 @@ def check_word_document(file):
                         auto_issues.append(f"Рисунки – пропущен рисунок {expected}")
                         break
 
+    # Проверка нумерации таблиц
     table_seq_issues = []
     if table_numbers_found:
         nums = sorted(set(table_numbers_found))
-
-    if nums[0] != 1:
-        table_seq_issues.append("Таблицы – неверная нумерация")
-    else:
-        expected = list(range(1, nums[-1] + 1))
-        if nums != expected:
+        if nums[0] != 1:
             table_seq_issues.append("Таблицы – неверная нумерация")
+        else:
+            expected = list(range(1, nums[-1] + 1))
+            if nums != expected:
+                table_seq_issues.append("Таблицы – неверная нумерация")
 
-    # --- ТАБЛИЦЫ ---
+    # --- ТАБЛИЦЫ (поиск подписей) ---
     end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
@@ -1082,46 +1077,37 @@ def check_word_document(file):
 
     table_issues = []
 
-for tbl_pos, table in tables_in_range:
-    caption_info = None
-    best_distance = None
+    for tbl_pos, table in tables_in_range:
+        caption_info = None
+        best_distance = None
+        for cap in table_captions_info:
+            if cap['body_idx'] is None:
+                continue
+            if cap['body_idx'] >= tbl_pos:
+                continue
+            # между подписью и таблицей не должно быть других таблиц
+            tables_between = [pos for pos, _ in tables_in_range if cap['body_idx'] < pos < tbl_pos]
+            if tables_between:
+                continue
+            distance = tbl_pos - cap['body_idx']
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                caption_info = cap
 
-    for cap in table_captions_info:
-        if cap['body_idx'] is None:
-            continue
+        if caption_info:
+            key = caption_info['key']
+            tbl_num = caption_info['number_str']
 
-        if cap['body_idx'] >= tbl_pos:
-            continue
+            if caption_info['body_idx'] is not None:
+                empty_errors = check_empty_line_before_after(
+                    doc,
+                    caption_info['body_idx'],
+                    start_body_pos,
+                    key
+                )
+                table_issues.extend(empty_errors)
 
-        tables_between = [
-            pos for pos, _ in tables_in_range
-            if cap['body_idx'] < pos < tbl_pos
-        ]
-
-        if tables_between:
-            continue
-
-        distance = tbl_pos - cap['body_idx']
-
-        if best_distance is None or distance < best_distance:
-            best_distance = distance
-            caption_info = cap
-
-    if caption_info:
-        key = caption_info['key']
-        tbl_num = caption_info['number_str']
-
-        if caption_info['body_idx'] is not None:
-            empty_errors = check_empty_line_before_after(
-                doc,
-                caption_info['body_idx'],
-                start_body_pos,
-                key
-            )
-            table_issues.extend(empty_errors)
-
-       
-
+            # Проверка полужирного внутри таблицы
             bold_in_table = False
             for row in table.rows:
                 for cell in row.cells:
@@ -1130,12 +1116,16 @@ for tbl_pos, table in tables_in_range:
                             if run.bold:
                                 bold_in_table = True
                                 break
-                        if bold_in_table: break
-                    if bold_in_table: break
-                if bold_in_table: break
+                        if bold_in_table:
+                            break
+                    if bold_in_table:
+                        break
+                if bold_in_table:
+                    break
             if bold_in_table:
                 table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
 
+            # Проверка продолжения таблицы
             if len(table.rows) > 2:
                 current_tbl_index = None
                 for i, (pos, _) in enumerate(tables_in_range):
@@ -1154,8 +1144,12 @@ for tbl_pos, table in tables_in_range:
                             markers_found = True
                             break
                 if not markers_found:
-                    manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
+                    manual_checks.append(
+                        f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / "
+                        f"«Окончание таблицы {tbl_num}» при переносе на следующую страницу"
+                    )
         else:
+            # Подпись не найдена
             prev_text = ""
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
                 elem = body_elems[i]
