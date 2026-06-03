@@ -698,6 +698,8 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             if not is_paragraph_bold(p):
                 auto_issues.append(f"{key} – заголовок должен быть полужирным")
+            if alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:          # <-- новая проверка
+                auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
             if prev_para_empty:
