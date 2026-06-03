@@ -72,13 +72,15 @@ def is_section_header(text):
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
         return True
-    if re.match(r'^\d+\.\s+[А-ЯЁ]', text) and is_all_caps(text):
-        if '«' in text or '»' in text:
+    # Новый надёжный критерий: начинается с цифры, точки и заглавной русской буквы
+    if re.match(r'^\d+\.\s+[А-ЯЁ]', text):
+        # Удаляем все «технические» символы и проверяем долю заглавных букв
+        clean = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
+        if not clean:
             return False
-        words = text.split()
-        if len(words) < 3 and len(text) < 30:
-            return False
-        return True
+        upper_count = sum(1 for c in clean if c.isupper())
+        # Если ≥ 80% букв заглавные — это заголовок раздела
+        return upper_count >= len(clean) * 0.8
     return False
 
 def normalize_title(text):
