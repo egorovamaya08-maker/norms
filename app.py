@@ -796,8 +796,14 @@ def check_word_document(file):
 
     # ---------- 5. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
     figure_counter = 0
+    if text:   # непустой параграф
+            if is_level1:
+                prev_was_section_header = True
+            else:
+                prev_was_section_header = False
     prev_para_empty = False
     prev_was_formula = False
+    prev_was_section_header = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
     indent_issues = []
@@ -932,7 +938,7 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            if prev_para_empty:
+            if prev_para_empty and not prev_was_section_header:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         elif is_figure:
