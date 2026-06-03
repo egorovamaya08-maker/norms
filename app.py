@@ -92,7 +92,7 @@ def is_section_header(text):
         return True
 
     # Основной критерий: номер с точкой + заглавные буквы
-    if re.match(r'^\d+\.\s+[А-ЯЁ]', cleaned_text):
+    if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned_text):
         # Подсчёт доли заглавных букв после удаления «технических» символов
         clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned_text)
         if not clean_letters:
@@ -897,7 +897,7 @@ def check_word_document(file):
         is_table_caption = text.startswith("Таблица")
 
         if not is_level1:
-            if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', norm_text.replace('\u00A0', ' ').replace('\u202F', ' ')):
+            if re.match(r'^\d+\.\d+(\.\d+)?\s*[А-Яа-я]', norm_text):
                 is_subsection = True
             else:
                 normalized = normalize_title(text)
