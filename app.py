@@ -6,9 +6,11 @@ import re
 from collections import defaultdict, Counter
 import zipfile
 from lxml import etree
+
 NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+
 # ------------------------------------------------------------
-# Вспомогательные функции (часть не изменилась)
+# Вспомогательные функции
 # ------------------------------------------------------------
 def get_effective_alignment(paragraph):
     if paragraph.alignment is not None:
@@ -96,26 +98,20 @@ def extract_toc_entries(doc, start_idx):
                 toc_entries.append(clean)
     return toc_entries
 
-# Расширенный список символов, которые считаются «тире» (в том числе PUA)
 def is_dash_char(ch):
     code = ord(ch)
-    # стандартные дефисы и тире
     if code in [0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015]:
         return True
-    # некоторые символы из Private Use Area, используемые Word для тире-маркеров
-    if code in [0xF02D]:   # основной PUA-тире
+    if code in [0xF02D]:   # PUA-тире
         return True
-    # можно добавить другие известные коды при необходимости
     return False
 
 def is_bullet_char(ch):
     code = ord(ch)
-    # стандартные буллиты
     return code in [0x2022, 0x2023, 0x25E6, 0x25CF, 0x25CB, 0x26AB, 0x2B24]
 
 def is_arrow_char(ch):
     code = ord(ch)
-    # простые стрелки (не все возможные, но основные диапазоны)
     return (0x2190 <= code <= 0x21FF or
             0x2794 <= code <= 0x27BF or
             0x2B00 <= code <= 0x2BFF)
@@ -127,29 +123,24 @@ def get_list_marker_info(paragraph, doc):
 
     first_char = text[0] if text else ""
 
-    # 1. Проверяем тире (все виды)
     if is_dash_char(first_char):
         return True, "тире", True
 
-    # 2. Цифра с точкой или скобкой
     if re.match(r'^\d+\)\s', text):
         return True, "нумерованный", True
     if re.match(r'^\d+\.\s', text):
         return True, "нумерованный", True
 
-    # 3. Буква (русская или латинская) со скобкой
     if re.match(r'^[а-яё]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
     if re.match(r'^[a-z]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
 
-    # 4. Явные буллиты и стрелки → недопустимые маркеры
     if is_bullet_char(first_char):
         return True, "круглый маркер (•)", False
     if is_arrow_char(first_char):
         return True, f"недопустимый маркер (стрелка {first_char})", False
 
-    # 5. Анализ через автонумерацию Word (numPr)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -196,17 +187,14 @@ def get_list_marker_info(paragraph, doc):
     except:
         pass
 
-    # 6. Дополнительная эвристика: абзац с висячим отступом,
-    # начинающийся с необычного символа → недопустимый маркер
     left_indent = get_effective_left_indent(paragraph)
     first_line = get_effective_first_line_indent(paragraph)
-    if left_indent > 0.5 and first_line < 0:  # типичный список
-        # первый символ не буква/цифра и не пробел → подозрительный маркер
+    if left_indent > 0.5 and first_line < 0:
         if not re.match(r'[А-Яа-яёЁA-Za-z0-9]', first_char) and first_char != ' ':
             return True, f"недопустимый маркер ({first_char})", False
 
     return False, "", True
-    
+
 def get_effective_first_line_indent(paragraph):
     pf = paragraph.paragraph_format
     if pf.first_line_indent is not None:
@@ -516,7 +504,6 @@ def group_issues(issues_list):
         else:
             standalone.append(issue)
 
-    # Объединение ошибок рисунков, если их > 3
     figure_keys = [k for k in grouped if re.match(r'^Рисунок\s+\d', k)]
     if len(figure_keys) > 3:
         all_fig_messages = []
@@ -539,7 +526,6 @@ def group_issues(issues_list):
             del grouped[k]
         standalone.insert(0, combined_fig)
 
-    # ---------- Объединение повторяющихся сообщений для таблиц ----------
     caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
     caption_msgs_keys = []
     for key in list(grouped.keys()):
@@ -565,7 +551,6 @@ def group_issues(issues_list):
         for k in caption_msgs_keys:
             grouped[k].append("Исправьте название на «Таблица " + k.split()[-1] + " – Название»")
 
-    # 2) Сообщения «название должно быть перед таблицей» (в standalone) >= 2 -> общая строка
     before_msgs = [issue for issue in standalone if issue.startswith("Таблица – название должно быть перед таблицей")]
     if len(before_msgs) >= 2:
         for msg in before_msgs:
@@ -577,7 +562,6 @@ def group_issues(issues_list):
             del grouped[k]
         standalone.insert(0, "Таблицы – название должно быть перед таблицей")
 
-    # ---------- Объединение всех строк "Таблицы –" в одну ----------
     table_common_msgs = [issue for issue in standalone if issue.startswith("Таблицы –")]
     if len(table_common_msgs) > 1:
         parts = [issue[len("Таблицы –"):] for issue in table_common_msgs]
@@ -586,7 +570,6 @@ def group_issues(issues_list):
             standalone.remove(issue)
         standalone.append(combined)
 
-    # Формируем плоский список авто‑ошибок
     result = []
     for issue in standalone:
         result.append(issue)
@@ -610,7 +593,6 @@ def group_issues(issues_list):
 
     result.sort(key=lambda x: (get_category_order(x), x))
 
-    # Обработка ручных проверок
     cont_pattern = re.compile(r'^Таблица\s+(\d+(?:\.\d+)?)\s+–\s+проверьте\s+наличие\s+«Продолжение таблицы \1»\s+/\s+«Окончание таблицы \1» при переносе на следующую страницу$')
     cont_msgs = [m for m in manual_issues if cont_pattern.match(m)]
     if len(cont_msgs) >= 2:
@@ -652,23 +634,15 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
             errors.append(f"{label} – добавьте пустую строку после подписи")
     return errors
 
-# Новая функция: проверяет наличие разрыва страницы/раздела перед указанным элементом body
 def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """
-    Проверяет, что элемент с индексом body_idx в body документа
-    находится на новой странице (с учётом разрыва раздела, явного
-    разрыва страницы или большого количества пустых параграфов).
-    """
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
 
-    blank_count = 0  # счётчик подряд идущих пустых параграфов
-
+    blank_count = 0
     for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
 
-        # --- 1. Прямой sectPr в body (последний раздел) ---
         if elem.tag == qn('w:sectPr'):
             if i == len(body_elems) - 1:
                 continue
@@ -676,49 +650,37 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             val = type_el.get(qn('w:val')) if type_el is not None else None
             if val == 'continuous':
                 continue
-            # nextPage, evenPage, oddPage или без типа → разрыв страницы
             return True
 
-        # --- 2. Параграф ---
         if elem.tag == qn('w:p'):
-            # 2a. Явный разрыв страницы внутри параграфа
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
 
-            # 2b. Разрыв раздела внутри w:pPr
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 sectPr = pPr.find(qn('w:sectPr'))
                 if sectPr is not None:
                     type_el = sectPr.find(qn('w:type'))
                     val = type_el.get(qn('w:val')) if type_el is not None else None
-                    if val != 'continuous':   # nextPage и т.п. или отсутствие
+                    if val != 'continuous':
                         return True
 
-            # 2c. Параграф не пуст?
             if has_content(elem):
-                # нашли контент – проверяем, хватило ли пустых строк для переноса
                 return blank_count >= min_empty_paragraphs
             else:
-                # пустой параграф – запоминаем и идём дальше
                 blank_count += 1
                 continue
 
-        # --- 3. Таблица ---
         if elem.tag == qn('w:tbl'):
             return blank_count >= min_empty_paragraphs
 
-    # если дошли до начала, не встретив контента – заголовок на новой странице
     return True
 
 def has_content(elem):
-    """Проверяет, содержит ли параграф значимый контент (текст, рисунки)."""
-    # наличие текста
     texts = [node.text or '' for node in elem.iter() if node.tag == qn('w:t')]
     if any(t.strip() for t in texts):
         return True
-    # наличие рисунков, полей и т.п. можно добавить по необходимости
     if elem.find('.//w:drawing', NSMAP) is not None:
         return True
     return False
@@ -728,7 +690,7 @@ def check_word_document(file):
     auto_issues = []
     manual_checks = []
 
-    # ---------- 1. ПОЛЯ СТРАНИЦ ----------
+    # --- ПОЛЯ ---
     margins_ok = True
     for section in doc.sections:
         if (abs(section.left_margin.mm - 20) > 0.5 or
@@ -740,7 +702,7 @@ def check_word_document(file):
     if not margins_ok:
         auto_issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
 
-    # ---------- 2. ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ----------
+    # --- ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ---
     start_idx = None
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
@@ -756,7 +718,7 @@ def check_word_document(file):
     if start_idx is None:
         return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
 
-    # ---------- 3. НУМЕРАЦИЯ СТРАНИЦ ----------
+    # --- НУМЕРАЦИЯ СТРАНИЦ ---
     try:
         intro_body_idx = None
         body_elements = list(doc.element.body)
@@ -778,7 +740,7 @@ def check_word_document(file):
 
     toc_entries = extract_toc_entries(doc, start_idx)
 
-    # ---------- 4. ГРАНИЦЫ СПИСКА ИСТОЧНИКОВ ----------
+    # --- ГРАНИЦЫ СПИСКА ИСТОЧНИКОВ ---
     lit_start = None
     for i in range(start_idx, len(doc.paragraphs)):
         txt = doc.paragraphs[i].text.strip()
@@ -794,7 +756,7 @@ def check_word_document(file):
                 lit_end = i
                 break
 
-    # ---------- 5. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
+    # --- ПРОВЕРКА ОСНОВНОГО ТЕКСТА ---
     figure_counter = 0
     prev_para_empty = False
     prev_was_formula = False
@@ -817,7 +779,6 @@ def check_word_document(file):
 
     table_captions_info = []
 
-    # Получаем start_body_pos – индекс элемента "ВВЕДЕНИЕ" или первого раздела
     try:
         start_body_pos = para_to_body_idx[start_idx]
     except:
@@ -834,9 +795,11 @@ def check_word_document(file):
                 auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
                 list_errors = []
             continue
+
         if has_page_number(text):
             prev_para_empty = False
             continue
+
         if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_section_header(text):
             prev_para_empty = False
             continue
@@ -880,6 +843,7 @@ def check_word_document(file):
             auto_issues.extend(errors)
             prev_para_empty = False
             continue
+
         if is_formula_or_equation(text):
             prev_was_formula = True
             prev_para_empty = False
@@ -901,7 +865,6 @@ def check_word_document(file):
 
         if is_level1:
             key = text[:80]
-            # Проверка новой страницы для всех разделов, кроме "ВВЕДЕНИЕ" (оно уже в начале)
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
                 if body_idx is not None:
@@ -933,6 +896,7 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
+            # Пустая строка допустима только после заголовка раздела
             if prev_para_empty and not prev_was_section_header:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
@@ -1009,12 +973,13 @@ def check_word_document(file):
                 indent_issues.append((key, first_line))
             if pf.space_before and pf.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
-       
-        if text:   # непустой параграф
-         if is_level1:
-             prev_was_section_header = True
-         else:
-             prev_was_section_header = False
+
+        # Обновление флага предыдущего раздела (только для непустых параграфов)
+        if text:
+            if is_level1:
+                prev_was_section_header = True
+            else:
+                prev_was_section_header = False
         prev_para_empty = False
         prev_was_formula = False
 
@@ -1051,8 +1016,7 @@ def check_word_document(file):
             if int_tbl_nums[0] != 1 or any(expected not in int_tbl_nums for expected in range(1, int_tbl_nums[-1] + 1)):
                 table_seq_issues.append("Таблицы – неверная нумерация")
 
-    # ---------- 6. ТАБЛИЦЫ ----------
-    # start_body_pos уже определено ранее
+    # --- ТАБЛИЦЫ ---
     end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
@@ -1145,7 +1109,7 @@ def check_word_document(file):
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
 
-    # ---------- 7. СПИСОК ИСТОЧНИКОВ ----------
+    # --- СПИСОК ИСТОЧНИКОВ ---
     if lit_start is not None:
         sources_with_issues = 0
         for i in range(lit_start + 1, lit_end):
@@ -1175,7 +1139,7 @@ def check_word_document(file):
         all_issues.extend(manual_checks)
     return group_issues(all_issues)
 
-# Интерфейс
+# --- ИНТЕРФЕЙС STREAMLIT ---
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
 st.title("📊 Автоматическая проверка документов Word")
 st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
