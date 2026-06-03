@@ -584,11 +584,12 @@ def check_word_document(file):
     prev_was_formula = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
-    
+    indent_issues = []          # <-- собираем ошибки отступа обычных абзацев
+
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
-        
+
         if not text:
             prev_para_empty = True
             if list_errors:
@@ -602,7 +603,7 @@ def check_word_document(file):
         if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_section_header(text):
             prev_para_empty = False
             continue
-        
+
         is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
         if is_list:
             if not marker_valid:
@@ -621,12 +622,12 @@ def check_word_document(file):
                     list_errors = []
             prev_para_empty = False
             continue
-        
+
         if list_errors:
             first_text = list_errors[0][1]
             auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
             list_errors = []
-        
+
         if is_table_continuation(text):
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
@@ -636,7 +637,7 @@ def check_word_document(file):
 
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
-        
+
         if is_formula_where_line(text):
             errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
             auto_issues.extend(errors)
@@ -646,12 +647,12 @@ def check_word_document(file):
             prev_was_formula = True
             prev_para_empty = False
             continue
-        
+
         is_level1 = is_section_header(text)
         is_subsection = False
         is_figure = text.startswith("Рисунок") or text.startswith("Рис.")
         is_table_caption = text.startswith("Таблица")
-        
+
         if not is_level1:
             if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
                 is_subsection = True
@@ -688,7 +689,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
-        
+
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
@@ -701,9 +702,8 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – удалите точку в конце")
             if prev_para_empty:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
-        
+
         elif is_figure:
-            # Унифицируем номер рисунка как "Рисунок N"
             num_match = re.search(r'(?:Рисунок|Рис\.)\s+(\d+(?:\.\d+)?)', text)
             if num_match:
                 fig_num = num_match.group(1)
@@ -711,10 +711,10 @@ def check_word_document(file):
             else:
                 figure_counter += 1
                 fig_number = f"Рисунок {figure_counter}"
-            
+
             if text.startswith("Рис."):
                 auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
-            
+
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
             if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
@@ -724,25 +724,38 @@ def check_word_document(file):
                 title = m.group(1).strip()
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
-            # Ручная проверка формата
             manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
-        
+
         elif is_table_caption:
             pass
-        
+
         else:
+            # ОБЫЧНЫЙ АБЗАЦ
             key = text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
-                auto_issues.append(f"«{key}» – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+                # Сохраняем ошибку отступа, но не выводим сразу
+                indent_issues.append((key, first_line))
             if pf.space_before and pf.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
-        
+
         prev_para_empty = False
         prev_was_formula = False
-    
+
+    # Обработка накопленных ошибок отступа основного текста
+    if indent_issues:
+        if len(indent_issues) > 2:
+            first_key, first_indent = indent_issues[0]
+            auto_issues.append(
+                f"Основной текст, начиная со строки «{first_key}» – "
+                f"установите абзацный отступ 1,0 см (сейчас {first_indent:.1f} см)"
+            )
+        else:
+            for key, fl in indent_issues:
+                auto_issues.append(f"«{key}» – установите абзацный отступ 1,0 см (сейчас {fl:.1f} см)")
+
     if list_errors:
         first_text = list_errors[0][1]
         auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
