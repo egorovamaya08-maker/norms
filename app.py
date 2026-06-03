@@ -800,7 +800,8 @@ def check_word_document(file):
         start_body_pos = para_to_body_idx[start_idx]
     except:
         start_body_pos = 0
-
+   
+    prev_block_type = None  # section, subsection, text
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
@@ -832,16 +833,11 @@ def check_word_document(file):
 
         # ==================== ИСПРАВЛЕНИЕ 1 ====================
         # Правильное обновление флагов
-        if is_level1 or is_subsection:
-            if is_level1:
-                prev_was_section_header = True
-                prev_was_subsection = False
-            else:
-                prev_was_subsection = True
-                prev_was_section_header = False
-        else:
-            prev_was_section_header = False
-            prev_was_subsection = False
+        current_block_type = "text"
+        if is_level1:    
+            current_block_type = "section"
+        elif is_subsection:
+            current_block_type = "subsection"
 
         # ==================== ИСПРАВЛЕНИЕ 2 ====================
         # Проверка отступа только для основного текста (не заголовков)
@@ -941,7 +937,10 @@ def check_word_document(file):
                 if tbl_match:
                     tbl_num = tbl_match.group(1)
                     tbl_num_float = float(tbl_num)
-                    table_numbers_found.append(tbl_num_float)
+                    try:
+                        table_numbers_found.append(int(tbl_num))
+                        except:    
+                            pass
                     key = f"Таблица {tbl_num}"
 
                     if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
@@ -1007,10 +1006,12 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
             # ==================== ИСПРАВЛЕНИЕ 3 ====================
-            if prev_para_empty and not prev_was_section_header:
+            # Пустая строка допустима сразу после раздела
+            if prev_para_empty and prev_block_type != "section":
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         # Сброс флагов для следующей итерации
+        prev_block_type = current_block_type
         if text:
             prev_para_empty = False
             prev_was_formula = False
@@ -1047,10 +1048,14 @@ def check_word_document(file):
 
     table_seq_issues = []
     if table_numbers_found:
-        int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
-        if int_tbl_nums:
-            if int_tbl_nums[0] != 1 or any(expected not in int_tbl_nums for expected in range(1, int_tbl_nums[-1] + 1)):
-                table_seq_issues.append("Таблицы – неверная нумерация")
+        nums = sorted(set(table_numbers_found))
+
+    if nums[0] != 1:
+        table_seq_issues.append("Таблицы – неверная нумерация")
+    else:
+        expected = list(range(1, nums[-1] + 1))
+        if nums != expected:
+            table_seq_issues.append("Таблицы – неверная нумерация")
 
     # --- ТАБЛИЦЫ ---
     end_body_pos = len(body_elems)
@@ -1079,14 +1084,28 @@ def check_word_document(file):
 
     for tbl_pos, table in tables_in_range:
         caption_info = None
-        for cap in table_captions_info:
-            if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
-                other_tables_between = any(
-                    other_pos < tbl_pos and other_pos > cap['body_idx']
-                    for other_pos, _ in tables_in_range
-                )
-                if not other_tables_between:
-                    caption_info = cap
+        best_distance = None
+        for cap in table_captions_info:    
+        if cap['body_idx'] is None:
+            continue
+
+        if cap['body_idx'] >= tbl_pos:
+            continue
+
+        tables_between = [
+            pos for pos, _ in tables_in_range
+            if cap['body_idx'] < pos < tbl_pos
+    ]
+
+        if tables_between:
+            continue
+
+        distance = tbl_pos - cap['body_idx']
+        
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            caption_info = cap
+        
         if caption_info:
             key = caption_info['key']
             tbl_num = caption_info['number_str']
