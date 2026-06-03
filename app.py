@@ -456,7 +456,7 @@ def get_category_order(issue):
         return (4, 1)
     if issue.startswith("Пояснение к формуле «"):
         return (5, 1)
-    if issue.startswith("Список начиная с «"):
+    if issue.startswith("Список, начиная с «"):
         return (6, 1)
     if issue.startswith("Нумерация страниц"):
         return (7, 1)
