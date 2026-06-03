@@ -72,14 +72,17 @@ def is_section_header(text):
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
         return True
-    # Новый надёжный критерий: начинается с цифры, точки и заглавной русской буквы
-    if re.match(r'^\d+\.\s+[А-ЯЁ]', text):
-        # Удаляем все «технические» символы и проверяем долю заглавных букв
+
+    # Нормализация пробельных символов (неразрывный, тонкий и т.п.)
+    normalized = text.replace('\u00A0', ' ').replace('\u202F', ' ').replace('\u2009', ' ')
+
+    if re.match(r'^\d+\.\s+[А-ЯЁ]', normalized):
+        # Очистку от спецсимволов делаем по исходному text,
+        # чтобы не потерять буквы, которые могут быть в оригинале
         clean = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
         if not clean:
             return False
         upper_count = sum(1 for c in clean if c.isupper())
-        # Если ≥ 80% букв заглавные — это заголовок раздела
         return upper_count >= len(clean) * 0.8
     return False
 
@@ -712,7 +715,7 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        if re.match(r'^\d+\.\s+[А-Яа-я]', txt) and not is_section_header(txt):
+        if re.match(r'^\d+\.\s+[А-Яа-я]', txt.replace('\u00A0', ' ')) and not is_section_header(txt.replace('\u00A0', ' ')):
             continue
         if is_section_header(txt):
             start_idx = i
@@ -857,7 +860,7 @@ def check_word_document(file):
         is_table_caption = text.startswith("Таблица")
 
         if not is_level1:
-            if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text):
+            if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text.replace('\u00A0', ' ').replace('\u202F', ' ')):
                 is_subsection = True
             else:
                 normalized = normalize_title(text)
