@@ -14,8 +14,7 @@ NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 # Нормализация текста: удаление невидимок, замена пробелов
 # ------------------------------------------------------------
 def normalize_text(text):
-    """Удаляет невидимые символы (категория Cf) с вставкой пробела,
-    заменяет все пробельные символы на обычный пробел."""
+    """Удаляет невидимые символы (категория Cf), заменяет все пробельные на обычный пробел."""
     if not text:
         return text
     result = []
@@ -23,23 +22,19 @@ def normalize_text(text):
     for ch in text:
         cat = unicodedata.category(ch)
         if cat == 'Cf':          # невидимка
-            # Если предыдущий символ был цифрой, а следующий – буквой,
-            # вставим пробел (этот случай мы обработаем при следующем символе)
             prev_digit = ch.isdigit() if not result else result[-1].isdigit()
             continue
         if ch.isspace():
             result.append(' ')
         else:
-            # Проверяем, не нужно ли вставить пробел перед буквой, если перед этим была цифра
+            # Между цифрой и буквой нужен пробел
             if result and result[-1].isdigit() and ch.isalpha():
-                # Между цифрой и буквой должен быть пробел
                 result.append(' ')
             result.append(ch)
-    # Удаляем лишние пробелы
     return re.sub(r'\s+', ' ', ''.join(result)).strip()
 
 # ------------------------------------------------------------
-# Вспомогательные функции
+# Вспомогательные функции (без изменений)
 # ------------------------------------------------------------
 def get_effective_alignment(paragraph):
     if paragraph.alignment is not None:
@@ -106,7 +101,6 @@ def is_section_header(text):
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
         return True
     # Основной критерий: номер с точкой + заглавные буквы
-    # \s* допускает отсутствие пробела после номера (если невидимка уже удалена)
     if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned):
         clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
         if not clean_letters:
@@ -136,7 +130,7 @@ def is_dash_char(ch):
     code = ord(ch)
     if code in [0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015]:
         return True
-    if code in [0xF02D]:   # PUA-тире
+    if code in [0xF02D]:
         return True
     return False
 
@@ -710,6 +704,9 @@ def has_content(elem):
         return True
     return False
 
+# ------------------------------------------------------------
+# Главная проверка документа
+# ------------------------------------------------------------
 def check_word_document(file):
     doc = docx.Document(file)
     auto_issues = []
@@ -735,9 +732,6 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        # Пропускаем нумерованные строки, которые не являются разделами
-        if re.match(r'^\d+\.\s*[А-Яа-я]', normalize_text(txt)) and not is_section_header(txt):
-            continue
         if is_section_header(txt):
             start_idx = i
             break
@@ -750,11 +744,7 @@ def check_word_document(file):
         body_elements = list(doc.element.body)
         for i, elem in enumerate(body_elements):
             if elem.tag == qn('w:p'):
-                texts = []
-                for t in elem.findall('.//w:t', qn('w')):
-                    if t.text:
-                        texts.append(t.text)
-                full_text = ''.join(texts).strip().upper()
+                full_text = ''.join(t.text or '' for t in elem.findall('.//w:t', qn('w'))).strip().upper()
                 if full_text == 'ВВЕДЕНИЕ':
                     intro_body_idx = i
                     break
@@ -787,6 +777,7 @@ def check_word_document(file):
     prev_para_empty = False
     prev_was_formula = False
     prev_was_section_header = False
+    prev_was_subsection = False          # новое
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
     indent_issues = []
@@ -813,7 +804,6 @@ def check_word_document(file):
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
-        # Единая нормализация через нашу функцию
         norm_text = normalize_text(text)
 
         if not text:
@@ -828,60 +818,8 @@ def check_word_document(file):
             prev_para_empty = False
             continue
 
-        # Пропускаем нумерованные строки, не являющиеся разделами (например, "1.2. текст")
-        if re.match(r'^\d+\.\s*[А-Яа-я]', norm_text) and not is_section_header(norm_text):
-            prev_para_empty = False
-            continue
-
-        is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
-        if is_list:
-            if not marker_valid:
-                if list_errors and idx == list_errors[-1][0] + 1:
-                    list_errors.append((idx, text, marker_type))
-                else:
-                    if list_errors:
-                        first_text = list_errors[0][1]
-                        auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
-                        list_errors = []
-                    list_errors.append((idx, text, marker_type))
-            else:
-                if list_errors:
-                    first_text = list_errors[0][1]
-                    auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
-                    list_errors = []
-            prev_para_empty = False
-            continue
-
-        if list_errors:
-            first_text = list_errors[0][1]
-            auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
-            list_errors = []
-
-        if is_table_continuation(norm_text):
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line) > 0.1:
-                auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
-            prev_para_empty = False
-            continue
-
-        pf = p.paragraph_format
-        alignment = get_effective_alignment(p)
-
-        if is_formula_where_line(norm_text):
-            errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
-            auto_issues.extend(errors)
-            prev_para_empty = False
-            continue
-
-        if is_formula_or_equation(norm_text):
-            prev_was_formula = True
-            prev_para_empty = False
-            continue
-
         is_level1 = is_section_header(norm_text)
         is_subsection = False
-        is_figure = norm_text.startswith("Рисунок") or norm_text.startswith("Рис.")
-        is_table_caption = norm_text.startswith("Таблица")
 
         if not is_level1:
             if re.match(r'^\d+\.\d+(\.\d+)?\s*[А-Яа-я]', norm_text):
@@ -892,13 +830,156 @@ def check_word_document(file):
                 if in_toc and len(text) > 20:
                     is_subsection = True
 
+        # ==================== ИСПРАВЛЕНИЕ 1 ====================
+        # Правильное обновление флагов
+        if is_level1 or is_subsection:
+            if is_level1:
+                prev_was_section_header = True
+                prev_was_subsection = False
+            else:
+                prev_was_subsection = True
+                prev_was_section_header = False
+        else:
+            prev_was_section_header = False
+            prev_was_subsection = False
+
+        # ==================== ИСПРАВЛЕНИЕ 2 ====================
+        # Проверка отступа только для основного текста (не заголовков)
+        if not is_level1 and not is_subsection:
+            # Проверка списков, продолжения таблиц, формул и т.д.
+            is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
+            if is_list:
+                # ... обработка списков ...
+                if not marker_valid:
+                    if list_errors and idx == list_errors[-1][0] + 1:
+                        list_errors.append((idx, text, marker_type))
+                    else:
+                        if list_errors:
+                            first_text = list_errors[0][1]
+                            auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                            list_errors = []
+                        list_errors.append((idx, text, marker_type))
+                else:
+                    if list_errors:
+                        first_text = list_errors[0][1]
+                        auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                        list_errors = []
+                prev_para_empty = False
+                continue
+
+            if list_errors:
+                first_text = list_errors[0][1]
+                auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                list_errors = []
+
+            if is_table_continuation(norm_text):
+                first_line = get_effective_first_line_indent(p)
+                if abs(first_line) > 0.1:
+                    auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
+                prev_para_empty = False
+                continue
+
+            if is_formula_where_line(norm_text):
+                errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
+                auto_issues.extend(errors)
+                prev_para_empty = False
+                continue
+
+            if is_formula_or_equation(norm_text):
+                prev_was_formula = True
+                prev_para_empty = False
+                continue
+
+            # Проверка рисунков
+            is_figure = norm_text.startswith("Рисунок") or norm_text.startswith("Рис.")
+            is_table_caption = norm_text.startswith("Таблица")
+
+            if is_figure:
+                # ... (код проверки рисунков без изменений)
+                num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', norm_text)
+                if num_match:
+                    fig_num = num_match.group(1)
+                    figure_numbers_found.append(float(fig_num))
+                else:
+                    figure_counter += 1
+                    fig_num = str(figure_counter)
+                fig_number = f"Рисунок {fig_num}"
+
+                if norm_text.startswith("Рис."):
+                    auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
+                if re.match(r'Рисунок\s*:', norm_text):
+                    auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
+                if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
+                    if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
+                        auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
+                    else:
+                        auto_issues.append(f"{fig_number} – должно быть тире после номера")
+                if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.CENTER:
+                    auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
+                if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
+                    auto_issues.append(f"{fig_number} – удалите точку в конце")
+                m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', norm_text)
+                if m:
+                    title = m.group(1).strip()
+                    if title and title[0].islower():
+                        auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
+
+                sizes = get_font_size_pt(p)
+                if sizes:
+                    if any(abs(s - 14) > 0.5 for s in sizes):
+                        auto_issues.append(f"{fig_number} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
+
+                body_idx = para_to_body_idx.get(idx)
+                if body_idx is not None:
+                    empty_errors = check_empty_line_before_after(doc, body_idx, start_body_pos, fig_number)
+                    auto_issues.extend(empty_errors)
+                prev_para_empty = False
+                continue
+
+            elif is_table_caption and not is_table_continuation(norm_text):
+                tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
+                if tbl_match:
+                    tbl_num = tbl_match.group(1)
+                    tbl_num_float = float(tbl_num)
+                    table_numbers_found.append(tbl_num_float)
+                    key = f"Таблица {tbl_num}"
+
+                    if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
+                        auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
+
+                    if text.rstrip().endswith("."):
+                        auto_issues.append(f"{key} – удалите точку в конце названия")
+                    sizes = get_font_size_pt(p)
+                    if sizes:
+                        if any(abs(s - 14) > 0.5 for s in sizes):
+                            auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
+
+                    table_captions_info.append({
+                        'para_idx': idx,
+                        'body_idx': para_to_body_idx.get(idx),
+                        'number': tbl_num_float,
+                        'number_str': tbl_num,
+                        'text': text,
+                        'key': key
+                    })
+                prev_para_empty = False
+                continue
+
+            # Основной текст (не заголовок, не список, не формула, не подпись)
+            key = norm_text[:50]
+            first_line = get_effective_first_line_indent(p)
+            if abs(first_line - 1.0) > 0.2:
+                indent_issues.append((key, first_line))
+            if p.paragraph_format.space_before and p.paragraph_format.space_before.pt > 0.5:
+                auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
+
+        # === Проверка заголовков ===
         if is_level1:
             key = text[:80]
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
-                if body_idx is not None:
-                    if not is_on_new_page(doc, body_idx, start_body_pos):
-                        auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
+                if body_idx is not None and not is_on_new_page(doc, body_idx, start_body_pos):
+                    auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка")
@@ -906,7 +987,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть полужирным")
             if re.match(r'^\d+\.', norm_text) and not is_all_caps(norm_text):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть прописными буквами")
-            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
+            if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
@@ -921,97 +1002,23 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             if not is_paragraph_bold(p):
                 auto_issues.append(f"{key} – заголовок должен быть полужирным")
-            if alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:
+            if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.JUSTIFY:
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            # Пустая строка допустима только после заголовка раздела
+            # ==================== ИСПРАВЛЕНИЕ 3 ====================
             if prev_para_empty and not prev_was_section_header:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
-        elif is_figure:
-            num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', norm_text)
-            if num_match:
-                fig_num = num_match.group(1)
-                figure_numbers_found.append(float(fig_num))
-            else:
-                figure_counter += 1
-                fig_num = str(figure_counter)
-            fig_number = f"Рисунок {fig_num}"
-
-            if norm_text.startswith("Рис."):
-                auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
-            if re.match(r'Рисунок\s*:', norm_text):
-                auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
-            if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
-                if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
-                    auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
-                else:
-                    auto_issues.append(f"{fig_number} – должно быть тире после номера")
-            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
-                auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
-            if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
-                auto_issues.append(f"{fig_number} – удалите точку в конце")
-            m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', norm_text)
-            if m:
-                title = m.group(1).strip()
-                if title and title[0].islower():
-                    auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
-
-            sizes = get_font_size_pt(p)
-            if sizes:
-                if any(abs(s - 14) > 0.5 for s in sizes):
-                    auto_issues.append(f"{fig_number} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
-
-            body_idx = para_to_body_idx.get(idx)
-            if body_idx is not None:
-                empty_errors = check_empty_line_before_after(doc, body_idx, start_body_pos, fig_number)
-                auto_issues.extend(empty_errors)
-
-        elif is_table_caption and not is_table_continuation(norm_text):
-            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
-            if tbl_match:
-                tbl_num = tbl_match.group(1)
-                tbl_num_float = float(tbl_num)
-                table_numbers_found.append(tbl_num_float)
-                key = f"Таблица {tbl_num}"
-
-                if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
-                    auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
-
-                if text.rstrip().endswith("."):
-                    auto_issues.append(f"{key} – удалите точку в конце названия")
-                sizes = get_font_size_pt(p)
-                if sizes:
-                    if any(abs(s - 14) > 0.5 for s in sizes):
-                        auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
-
-                table_captions_info.append({
-                    'para_idx': idx,
-                    'body_idx': para_to_body_idx.get(idx),
-                    'number': tbl_num_float,
-                    'number_str': tbl_num,
-                    'text': text,
-                    'key': key
-                })
-
-        else:
-            key = norm_text[:50]
-            first_line = get_effective_first_line_indent(p)
-            if abs(first_line - 1.0) > 0.2:
-                indent_issues.append((key, first_line))
-            if pf.space_before and pf.space_before.pt > 0.5:
-                auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
-
-        # Обновление флага предыдущего раздела (только для непустых параграфов)
+        # Сброс флагов для следующей итерации
         if text:
-            if is_level1:
-                prev_was_section_header = True
-            else:
-                prev_was_section_header = False
-        prev_para_empty = False
-        prev_was_formula = False
+            prev_para_empty = False
+            prev_was_formula = False
+        else:
+            prev_para_empty = True
+        # не сбрасываем prev_was_section_header / prev_was_subsection — они обновлены выше
 
+    # --- ЗАВЕРШАЮЩИЕ ПРОВЕРКИ ---
     if indent_issues:
         if len(indent_issues) > 2:
             first_key, first_indent = indent_issues[0]
