@@ -72,6 +72,13 @@ def is_section_header(text):
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', text, re.IGNORECASE):
         return True
+    # Полагаемся на уже нормализованный текст
+    if re.match(r'^\d+\.\s+[А-ЯЁ]', text):
+        clean = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
+        if clean:
+            upper_count = sum(1 for c in clean if c.isupper())
+            return upper_count >= len(clean) * 0.8
+    return False
 
     # Нормализация пробельных символов (неразрывный, тонкий и т.п.)
     normalized = text.replace('\u00A0', ' ').replace('\u202F', ' ').replace('\u2009', ' ')
@@ -792,6 +799,7 @@ def check_word_document(file):
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
+        norm_text = text.replace('\u00A0', ' ').replace('\u202F', ' ').replace('\t', ' ')
 
         if not text:
             prev_para_empty = True
@@ -805,7 +813,7 @@ def check_word_document(file):
             prev_para_empty = False
             continue
 
-        if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_section_header(text):
+        if re.match(r'^\d+\.\s+[А-Яа-я]', text) and not is_section_header(norm_text):
             prev_para_empty = False
             continue
 
@@ -833,7 +841,7 @@ def check_word_document(file):
             auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
             list_errors = []
 
-        if is_table_continuation(text):
+        if is_table_continuation(norm_text):
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
                 auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
@@ -843,24 +851,24 @@ def check_word_document(file):
         pf = p.paragraph_format
         alignment = get_effective_alignment(p)
 
-        if is_formula_where_line(text):
+        if is_formula_where_line(norm_text):
             errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
             auto_issues.extend(errors)
             prev_para_empty = False
             continue
 
-        if is_formula_or_equation(text):
+        if is_formula_or_equation(norm_text):
             prev_was_formula = True
             prev_para_empty = False
             continue
 
-        is_level1 = is_section_header(text)
+        is_level1 = is_section_header(norm_text)
         is_subsection = False
         is_figure = text.startswith("Рисунок") or text.startswith("Рис.")
         is_table_caption = text.startswith("Таблица")
 
         if not is_level1:
-            if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', text.replace('\u00A0', ' ').replace('\u202F', ' ')):
+            if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-я]', norm_text.replace('\u00A0', ' ').replace('\u202F', ' ')):
                 is_subsection = True
             else:
                 normalized = normalize_title(text)
@@ -890,7 +898,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
 
         elif is_subsection:
-            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', text).strip()
+            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s+', '', norm_text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
