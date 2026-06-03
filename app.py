@@ -1082,10 +1082,11 @@ def check_word_document(file):
 
     table_issues = []
 
-    for tbl_pos, table in tables_in_range:
-        caption_info = None
-        best_distance = None
-        for cap in table_captions_info:    
+for tbl_pos, table in tables_in_range:
+    caption_info = None
+    best_distance = None
+
+    for cap in table_captions_info:
         if cap['body_idx'] is None:
             continue
 
@@ -1095,24 +1096,31 @@ def check_word_document(file):
         tables_between = [
             pos for pos, _ in tables_in_range
             if cap['body_idx'] < pos < tbl_pos
-    ]
+        ]
 
         if tables_between:
             continue
 
         distance = tbl_pos - cap['body_idx']
-        
+
         if best_distance is None or distance < best_distance:
             best_distance = distance
             caption_info = cap
-        
-        if caption_info:
-            key = caption_info['key']
-            tbl_num = caption_info['number_str']
 
-            if caption_info['body_idx'] is not None:
-                empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
-                table_issues.extend(empty_errors)
+    if caption_info:
+        key = caption_info['key']
+        tbl_num = caption_info['number_str']
+
+        if caption_info['body_idx'] is not None:
+            empty_errors = check_empty_line_before_after(
+                doc,
+                caption_info['body_idx'],
+                start_body_pos,
+                key
+            )
+            table_issues.extend(empty_errors)
+
+       
 
             bold_in_table = False
             for row in table.rows:
