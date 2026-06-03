@@ -23,13 +23,11 @@ def is_paragraph_bold(paragraph):
     if runs:
         if any(r.bold for r in runs):
             return True
-    
     try:
         if paragraph.style and paragraph.style.font and paragraph.style.font.bold:
             return True
     except:
         pass
-    
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -40,7 +38,6 @@ def is_paragraph_bold(paragraph):
                     val = bold_elem.get(qn('w:val'))
                     if val != 'false' and val != '0':
                         return True
-            
             for r in paragraph._element.findall(qn('w:r')):
                 rPr = r.find(qn('w:rPr'))
                 if rPr is not None:
@@ -51,7 +48,6 @@ def is_paragraph_bold(paragraph):
                             return True
     except:
         pass
-    
     return False
 
 def is_empty_paragraph(paragraph):
@@ -113,9 +109,7 @@ def get_list_marker_info(paragraph, doc):
     text = paragraph.text.strip()
     if not text:
         return False, "", True
-    
     first_char = text[0] if text else ""
-    
     if is_dash_char(first_char):
         return True, "тире", True
     if re.match(r'^\d+\)\s', text):
@@ -126,7 +120,6 @@ def get_list_marker_info(paragraph, doc):
         return True, "буквенный", True
     if is_bullet_char(first_char):
         return True, "круглый маркер (•)", False
-    
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -256,18 +249,15 @@ def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty
     errors = []
     short_text = text[:60] + "…" if len(text) > 60 else text
     key = f"Пояснение к формуле «{short_text}»"
-    
     if text.startswith("Где"):
         errors.append(f"{key} – «где» должно быть с маленькой буквы")
     if re.match(r'^[Гг]де\s*:', text):
         errors.append(f"{key} – уберите двоеточие после «где»")
-    
     first_line = get_effective_first_line_indent(paragraph)
     if abs(first_line - 1.0) > 0.2:
         errors.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
     if prev_para_empty and prev_was_formula:
         errors.append(f"{key} – уберите пустую строку перед пояснением (должно идти сразу после формулы)")
-    
     explanation_text = re.sub(r'^[Гг]де\s*:?\s*', '', text).strip()
     lines = [l.strip() for l in explanation_text.split('\t') if l.strip()]
     if len(lines) > 1:
@@ -409,29 +399,33 @@ def check_page_numbering(file, intro_start_idx):
     return issues
 
 def get_category_order(issue):
-    """Возвращает приоритет категории для сортировки (меньше – выше)."""
+    """Возвращает кортеж (приоритет, подприоритет) для сортировки."""
+    # Подприоритет: 0 для общих замечаний («Таблицы –», «Рисунки –»), 1 для конкретных.
+    if issue.startswith("Таблицы –"):
+        return (4, 0)
+    if issue.startswith("Рисунки –"):
+        return (3, 0)
     if issue.startswith("«") and "» –" in issue:
-        return 1   # заголовок раздела
+        return (1, 1)
     if issue.startswith("Подраздел «"):
-        return 2   # подраздел
-    if issue.startswith("Рисунок ") or issue.startswith("Рисунки –"):
-        return 3   # рисунки
-    if issue.startswith("Таблица ") or issue.startswith("Таблицы –"):
-        return 4   # таблицы
+        return (2, 1)
+    if issue.startswith("Рисунок "):
+        return (3, 1)
+    if issue.startswith("Таблица "):
+        return (4, 1)
     if issue.startswith("Пояснение к формуле «"):
-        return 5   # формулы
+        return (5, 1)
     if issue.startswith("Список начиная с «"):
-        return 6   # списки
+        return (6, 1)
     if issue.startswith("Нумерация страниц"):
-        return 7   # нумерация страниц
+        return (7, 1)
     if issue.startswith("Поля страниц"):
-        return 8   # поля
+        return (8, 1)
     if issue.startswith("Основной текст, начиная со строки «"):
-        return 9   # основной текст
+        return (9, 1)
     if issue.startswith("Список источников"):
-        return 10  # список источников
-    return 11      # всё остальное
-
+        return (10, 1)
+    return (11, 1)
 
 def group_issues(issues_list):
     auto_issues = []
@@ -489,7 +483,6 @@ def group_issues(issues_list):
             all_fig_messages.extend(grouped[k])
         msg_counts = Counter(all_fig_messages)
         unique_msgs = list(msg_counts.keys())
-        # порядок для сводной формулировки
         first_seen = {}
         for msg in all_fig_messages:
             if msg not in first_seen:
@@ -526,7 +519,7 @@ def group_issues(issues_list):
             else:
                 result.append(f"«{key}» – {combined}")
 
-    # СОРТИРОВКА ПО КАТЕГОРИЯМ
+    # СОРТИРОВКА ПО КАТЕГОРИЯМ с учётом подприоритета
     result.sort(key=lambda x: (get_category_order(x), x))
 
     if manual_issues:
@@ -535,7 +528,6 @@ def group_issues(issues_list):
     return result
 
 def get_font_size_pt(paragraph):
-    """Возвращает множество размеров шрифта в пунктах для абзаца."""
     sizes = set()
     for run in paragraph.runs:
         if run.font.size:
@@ -543,21 +535,16 @@ def get_font_size_pt(paragraph):
     return sizes
 
 def check_empty_line_before_after(doc, idx, start_idx, label):
-    """Проверяет наличие пустых строк до и после элемента с индексом idx.
-       Возвращает список ошибок."""
     errors = []
     body_elems = list(doc.element.body)
-    # Проверка ДО
     if idx > start_idx:
         prev_elem = body_elems[idx - 1]
-        # Пустая строка – это параграф без текста
         is_empty_prev = (
             prev_elem.tag == qn('w:p') and
             not prev_elem.xpath('string(.)').strip()
         )
         if not is_empty_prev:
             errors.append(f"{label} – добавьте пустую строку перед подписью")
-    # Проверка ПОСЛЕ
     if idx + 1 < len(body_elems):
         next_elem = body_elems[idx + 1]
         is_empty_next = (
@@ -567,7 +554,6 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
         if not is_empty_next:
             errors.append(f"{label} – добавьте пустую строку после подписи")
     return errors
-
 
 def check_word_document(file):
     doc = docx.Document(file)
@@ -651,7 +637,6 @@ def check_word_document(file):
     figure_numbers_found = []
     table_numbers_found = []
 
-    # Соответствие индексов параграфов и body-элементов
     para_to_body_idx = {}
     for i, elem in enumerate(doc.element.body):
         if elem.tag == qn('w:p'):
@@ -660,7 +645,7 @@ def check_word_document(file):
                     para_to_body_idx[j] = i
                     break
 
-    table_captions_info = []   # {'para_idx': int, 'body_idx': int, 'number': float, 'number_str': str, 'text': str, 'key': str}
+    table_captions_info = []
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -830,13 +815,10 @@ def check_word_document(file):
                 table_numbers_found.append(tbl_num_float)
                 key = f"Таблица {tbl_num}"
 
-                if re.match(r'Таблица\s*:', text):
-                    auto_issues.append(f"{key} – замените двоеточие на тире (формат: «Таблица N — Название»)")
-                if not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[–—]', text):
-                    if re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[-]', text):
-                        auto_issues.append(f"{key} – замените дефис на тире (—)")
-                    else:
-                        auto_issues.append(f"{key} – должно быть «Таблица {tbl_num} — Название»")
+                # Единый комментарий о тире/названии
+                if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+—\s+\S', text):
+                    auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} — Название»")
+
                 if text.rstrip().endswith("."):
                     auto_issues.append(f"{key} – удалите точку в конце названия")
                 sizes = get_font_size_pt(p)
@@ -854,7 +836,6 @@ def check_word_document(file):
                 })
 
         else:
-            # ОБЫЧНЫЙ АБЗАЦ
             key = text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
@@ -865,7 +846,6 @@ def check_word_document(file):
         prev_para_empty = False
         prev_was_formula = False
 
-    # Обработка накопленных ошибок отступа основного текста
     if indent_issues:
         if len(indent_issues) > 2:
             first_key, first_indent = indent_issues[0]
@@ -893,18 +873,13 @@ def check_word_document(file):
                         auto_issues.append(f"Рисунки – пропущен рисунок {expected}")
                         break
 
-    # Последовательность таблиц (будет вставлена первой в блок таблиц)
+    # Последовательность таблиц – единый комментарий «неверная нумерация»
     table_seq_issues = []
     if table_numbers_found:
         int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
         if int_tbl_nums:
-            if int_tbl_nums[0] != 1:
-                table_seq_issues.append("Таблицы – нумерация должна начинаться с 1")
-            else:
-                for expected in range(1, int_tbl_nums[-1] + 1):
-                    if expected not in int_tbl_nums:
-                        table_seq_issues.append(f"Таблицы – пропущена таблица {expected}")
-                        break
+            if int_tbl_nums[0] != 1 or any(expected not in int_tbl_nums for expected in range(1, int_tbl_nums[-1] + 1)):
+                table_seq_issues.append("Таблицы – неверная нумерация")
 
     # ---------- 6. ТАБЛИЦЫ ----------
     try:
@@ -934,10 +909,9 @@ def check_word_document(file):
             continue
         tables_in_range.append((tbl_pos, table))
 
-    table_issues = []  # временный список
+    table_issues = []
 
     for tbl_pos, table in tables_in_range:
-        # Ищем подпись: последний caption с body_idx < tbl_pos и без других таблиц между ними
         caption_info = None
         for cap in table_captions_info:
             if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
@@ -951,12 +925,10 @@ def check_word_document(file):
             key = caption_info['key']
             tbl_num = caption_info['number_str']
 
-            # Пустые строки
             if caption_info['body_idx'] is not None:
                 empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
                 table_issues.extend(empty_errors)
 
-            # Полужирный в таблице
             bold_in_table = False
             for row in table.rows:
                 for cell in row.cells:
@@ -971,9 +943,8 @@ def check_word_document(file):
             if bold_in_table:
                 table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
 
-            # Проверка продолжения/окончания (если таблица большая)
+            # Перенос в ручную проверку
             if len(table.rows) > 2:
-                # Индекс текущей таблицы в tables_in_range
                 current_tbl_index = None
                 for i, (pos, _) in enumerate(tables_in_range):
                     if pos == tbl_pos:
@@ -991,7 +962,7 @@ def check_word_document(file):
                             markers_found = True
                             break
                 if not markers_found:
-                    table_issues.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
+                    manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
             # Таблица без подписи
             prev_text = ""
@@ -1002,9 +973,13 @@ def check_word_document(file):
                     if txt:
                         prev_text = txt[:50]
                         break
-            table_issues.append(f"Таблица без подписи – расположена после абзаца: «{prev_text}…»" if prev_text else "Таблица без подписи")
+            table_issues.append(
+                f"Таблица без подписи – название таблицы должно быть перед таблицей "
+                f"(расположена после абзаца: «{prev_text}…»)" if prev_text
+                else "Таблица без подписи – название таблицы должно быть перед таблицей"
+            )
 
-    # Добавляем сначала проблемы последовательности, затем остальные замечания к таблицам
+    # Сначала общее замечание по нумерации, затем остальные замечания к таблицам
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
 
@@ -1037,7 +1012,7 @@ def check_word_document(file):
         all_issues.append("📋 Для проверки человеком:")
         all_issues.extend(manual_checks)
     return group_issues(all_issues)
-    
+
 # Интерфейс
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
 st.title("📊 Автоматическая проверка документов Word")
