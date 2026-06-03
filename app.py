@@ -796,11 +796,6 @@ def check_word_document(file):
 
     # ---------- 5. ПРОВЕРКА ОСНОВНОГО ТЕКСТА ----------
     figure_counter = 0
-    if text:   # непустой параграф
-            if is_level1:
-                prev_was_section_header = True
-            else:
-                prev_was_section_header = False
     prev_para_empty = False
     prev_was_formula = False
     prev_was_section_header = False
@@ -1014,7 +1009,12 @@ def check_word_document(file):
                 indent_issues.append((key, first_line))
             if pf.space_before and pf.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
-
+       
+        if text:   # непустой параграф
+         if is_level1:
+             prev_was_section_header = True
+         else:
+             prev_was_section_header = False
         prev_para_empty = False
         prev_was_formula = False
 
