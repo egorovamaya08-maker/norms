@@ -96,33 +96,60 @@ def extract_toc_entries(doc, start_idx):
                 toc_entries.append(clean)
     return toc_entries
 
+# Расширенный список символов, которые считаются «тире» (в том числе PUA)
 def is_dash_char(ch):
     code = ord(ch)
+    # стандартные дефисы и тире
     if code in [0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015]:
         return True
-    if 0xE000 <= code <= 0xF8FF:
+    # некоторые символы из Private Use Area, используемые Word для тире-маркеров
+    if code in [0xF02D]:   # основной PUA-тире
         return True
+    # можно добавить другие известные коды при необходимости
     return False
 
 def is_bullet_char(ch):
     code = ord(ch)
+    # стандартные буллиты
     return code in [0x2022, 0x2023, 0x25E6, 0x25CF, 0x25CB, 0x26AB, 0x2B24]
+
+def is_arrow_char(ch):
+    code = ord(ch)
+    # простые стрелки (не все возможные, но основные диапазоны)
+    return (0x2190 <= code <= 0x21FF or
+            0x2794 <= code <= 0x27BF or
+            0x2B00 <= code <= 0x2BFF)
 
 def get_list_marker_info(paragraph, doc):
     text = paragraph.text.strip()
     if not text:
         return False, "", True
+
     first_char = text[0] if text else ""
+
+    # 1. Проверяем тире (все виды)
     if is_dash_char(first_char):
         return True, "тире", True
+
+    # 2. Цифра с точкой или скобкой
     if re.match(r'^\d+\)\s', text):
         return True, "нумерованный", True
-    if re.match(r'^[а-яё]\)\s', text):
+    if re.match(r'^\d+\.\s', text):
+        return True, "нумерованный", True
+
+    # 3. Буква (русская или латинская) со скобкой
+    if re.match(r'^[а-яё]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
-    if re.match(r'^[a-z]\)\s', text):
+    if re.match(r'^[a-z]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
+
+    # 4. Явные буллиты и стрелки → недопустимые маркеры
     if is_bullet_char(first_char):
         return True, "круглый маркер (•)", False
+    if is_arrow_char(first_char):
+        return True, f"недопустимый маркер (стрелка {first_char})", False
+
+    # 5. Анализ через автонумерацию Word (numPr)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -156,7 +183,10 @@ def get_list_marker_info(paragraph, doc):
                                                         clean = re.sub(r'%\d+', '', txt_val).strip()
                                                         if clean and is_dash_char(clean[0]):
                                                             return True, "тире", True
-                                                return True, "круглый маркер (•)", False
+                                                        else:
+                                                            return True, "круглый маркер (•)", False
+                                                else:
+                                                    return True, "круглый маркер (•)", False
                                             elif fmt == 'decimal':
                                                 return True, "нумерованный (цифры)", True
                                             elif fmt in ['lowerLetter', 'upperLetter']:
@@ -165,8 +195,18 @@ def get_list_marker_info(paragraph, doc):
                                                 return True, f"формат '{fmt}'", True
     except:
         pass
-    return False, "", True
 
+    # 6. Дополнительная эвристика: абзац с висячим отступом,
+    # начинающийся с необычного символа → недопустимый маркер
+    left_indent = get_effective_left_indent(paragraph)
+    first_line = get_effective_first_line_indent(paragraph)
+    if left_indent > 0.5 and first_line < 0:  # типичный список
+        # первый символ не буква/цифра и не пробел → подозрительный маркер
+        if not re.match(r'[А-Яа-яёЁA-Za-z0-9]', first_char) and first_char != ' ':
+            return True, f"недопустимый маркер ({first_char})", False
+
+    return False, "", True
+    
 def get_effective_first_line_indent(paragraph):
     pf = paragraph.paragraph_format
     if pf.first_line_indent is not None:
