@@ -939,8 +939,8 @@ def check_word_document(file):
                     tbl_num_float = float(tbl_num)
                     try:
                         table_numbers_found.append(int(tbl_num))
-                        except:    
-                            pass
+                    except:    
+                        pass
                     key = f"Таблица {tbl_num}"
 
                     if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
