@@ -408,11 +408,36 @@ def check_page_numbering(file, intro_start_idx):
         pass
     return issues
 
+def get_category_order(issue):
+    """Возвращает приоритет категории для сортировки (меньше – выше)."""
+    if issue.startswith("«") and "» –" in issue:
+        return 1   # заголовок раздела
+    if issue.startswith("Подраздел «"):
+        return 2   # подраздел
+    if issue.startswith("Рисунок ") or issue.startswith("Рисунки –"):
+        return 3   # рисунки
+    if issue.startswith("Таблица ") or issue.startswith("Таблицы –"):
+        return 4   # таблицы
+    if issue.startswith("Пояснение к формуле «"):
+        return 5   # формулы
+    if issue.startswith("Список начиная с «"):
+        return 6   # списки
+    if issue.startswith("Нумерация страниц"):
+        return 7   # нумерация страниц
+    if issue.startswith("Поля страниц"):
+        return 8   # поля
+    if issue.startswith("Основной текст, начиная со строки «"):
+        return 9   # основной текст
+    if issue.startswith("Список источников"):
+        return 10  # список источников
+    return 11      # всё остальное
+
+
 def group_issues(issues_list):
     auto_issues = []
     manual_issues = []
     manual_section = False
-    
+
     for issue in issues_list:
         if issue.startswith("📋 Для проверки человеком"):
             manual_section = True
@@ -421,10 +446,10 @@ def group_issues(issues_list):
             manual_issues.append(issue)
         else:
             auto_issues.append(issue)
-    
+
     grouped = defaultdict(list)
     standalone = []
-    
+
     for issue in auto_issues:
         match = re.match(
             r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|'
@@ -455,7 +480,7 @@ def group_issues(issues_list):
                 standalone.append(issue)
         else:
             standalone.append(issue)
-    
+
     # Объединение ошибок рисунков, если их больше 3
     figure_keys = [k for k in grouped if re.match(r'^Рисунок\s+\d', k)]
     if len(figure_keys) > 3:
@@ -463,25 +488,24 @@ def group_issues(issues_list):
         for k in figure_keys:
             all_fig_messages.extend(grouped[k])
         msg_counts = Counter(all_fig_messages)
+        unique_msgs = list(msg_counts.keys())
+        # порядок для сводной формулировки
         first_seen = {}
         for msg in all_fig_messages:
             if msg not in first_seen:
                 first_seen[msg] = len(first_seen)
-        unique_msgs = list(msg_counts.keys())
         unique_msgs.sort(key=lambda m: (-msg_counts[m], first_seen[m]))
-        # Замены для сводной формулировки
         replacements = {
             "удалите точку в конце": "в названии не должно быть точки в конце",
             "уберите точку в конце": "в названии не должно быть точки в конце"
         }
         transformed = [replacements.get(m, m) for m in unique_msgs]
         combined_fig = "Рисунки – " + ", ".join(transformed)
-        # Удаляем сгруппированные ключи и добавляем сводную запись
         for k in figure_keys:
             del grouped[k]
         standalone.insert(0, combined_fig)
-    
-    # Формируем результат
+
+    # Формируем плоский список авто‑ошибок
     result = []
     for issue in standalone:
         result.append(issue)
@@ -501,7 +525,10 @@ def group_issues(issues_list):
                 result.append(f"{key} – {combined}")
             else:
                 result.append(f"«{key}» – {combined}")
-    
+
+    # СОРТИРОВКА ПО КАТЕГОРИЯМ
+    result.sort(key=lambda x: (get_category_order(x), x))
+
     if manual_issues:
         result.append("\n📋 Для проверки человеком:")
         result.extend(manual_issues)
