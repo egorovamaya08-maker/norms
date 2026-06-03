@@ -586,6 +586,9 @@ def check_word_document(file):
     list_errors = []
     indent_issues = []
 
+    figure_numbers_found = []      # для проверки последовательности
+    table_numbers_found = []       # для проверки последовательности
+
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
@@ -706,28 +709,34 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         elif is_figure:
-            num_match = re.search(r'(?:Рисунок|Рис\.)\s+(\d+(?:\.\d+)?)', text)
+            # Извлекаем номер с возможным двоеточием
+            num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', text)
             if num_match:
                 fig_num = num_match.group(1)
-                fig_number = f"Рисунок {fig_num}"
+                figure_numbers_found.append(float(fig_num))
             else:
                 figure_counter += 1
-                fig_number = f"Рисунок {figure_counter}"
+                fig_num = str(figure_counter)
+            fig_number = f"Рисунок {fig_num}"
 
             if text.startswith("Рис."):
                 auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
-
+            if re.match(r'Рисунок\s*:', text):
+                auto_issues.append(f"{fig_number} – замените двоеточие на тире")
+            # Проверка наличия тире после номера (если это не двоеточие, которое уже обработано)
+            if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', text) and not re.match(r'Рисунок\s*:', text):
+                auto_issues.append(f"{fig_number} – должно быть тире после номера")
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
             if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
                 auto_issues.append(f"{fig_number} – удалите точку в конце")
-            m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–\-]\s*(.+)$', text)
+            m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', text)
             if m:
                 title = m.group(1).strip()
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
 
-            # Проверка пустых строк до и после подписи
+            # Пустые строки до и после
             if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
                 auto_issues.append(f"{fig_number} – добавьте пустую строку перед подписью рисунка")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
@@ -736,7 +745,19 @@ def check_word_document(file):
             manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
 
         elif is_table_caption:
-            pass
+            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
+            if tbl_match:
+                tbl_num = tbl_match.group(1)
+                table_numbers_found.append(float(tbl_num))
+                key = f"Таблица {tbl_num}"
+                # Проверки формата подписи таблицы
+                if re.match(r'Таблица\s*:', text):
+                    auto_issues.append(f"{key} – замените двоеточие на тире")
+                if not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[–—]', text):
+                    auto_issues.append(f"{key} – должно быть «Таблица {tbl_num} — Название»")
+                if text.rstrip().endswith("."):
+                    auto_issues.append(f"{key} – удалите точку в конце названия")
+            # Дальнейшие проверки (пустые строки относительно таблицы) будут в разделе 6
 
         else:
             # ОБЫЧНЫЙ АБЗАЦ
@@ -765,6 +786,26 @@ def check_word_document(file):
     if list_errors:
         first_text = list_errors[0][1]
         auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+
+    # Проверка последовательности нумерации рисунков (только для целых номеров)
+    if figure_numbers_found:
+        if all(num == int(num) for num in figure_numbers_found):
+            expected = 1
+            for num in figure_numbers_found:
+                if int(num) != expected:
+                    auto_issues.append(f"Рисунки – нарушена последовательность нумерации: после рисунка {expected-1} идёт рисунок {int(num)}")
+                    break
+                expected += 1
+
+    # Проверка последовательности нумерации таблиц (только для целых номеров)
+    if table_numbers_found:
+        if all(num == int(num) for num in table_numbers_found):
+            expected = 1
+            for num in table_numbers_found:
+                if int(num) != expected:
+                    auto_issues.append(f"Таблицы – нарушена последовательность нумерации: после таблицы {expected-1} идёт таблица {int(num)}")
+                    break
+                expected += 1
 
     # ---------- 6. ТАБЛИЦЫ ----------
     try:
@@ -812,13 +853,7 @@ def check_word_document(file):
             tbl_num_match = re.match(r'Таблица\s+([\d.]+)', caption)
             tbl_num = tbl_num_match.group(1) if tbl_num_match else str(t_idx)
             key = f"Таблица {tbl_num}"
-            if '—' not in caption and '–' not in caption:
-                if '--' in caption or ' - ' in caption:
-                    auto_issues.append(f"{key} – замените дефис на тире (—) в подписи")
-            if not re.match(r'Таблица\s+[\d.]+\s+[–—]\s+', caption):
-                auto_issues.append(f"{key} – должно быть «Таблица {tbl_num} — Название»")
-            if caption.rstrip().endswith("."):
-                auto_issues.append(f"{key} – удалите точку в конце названия")
+            # Оставляем только проверки расположения
             if cap_pos is not None and cap_pos > start_idx:
                 if not is_empty_paragraph(doc.paragraphs[cap_pos - 1]):
                     auto_issues.append(f"{key} – добавьте пустую строку перед подписью таблицы")
@@ -902,7 +937,6 @@ def check_word_document(file):
         all_issues.append("📋 Для проверки человеком:")
         all_issues.extend(manual_checks)
     return group_issues(all_issues)
-
 # Интерфейс
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
 st.title("📊 Автоматическая проверка документов Word")
