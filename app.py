@@ -613,46 +613,77 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
     return errors
 
 # Новая функция: проверяет наличие разрыва страницы/раздела перед указанным элементом body
-def has_page_break_before(doc, body_idx, start_body_pos):
+def is_on_new_page(doc, body_idx, start_body_pos=0):
     """
-    Ищет явный разрыв страницы или раздела перед элементом с индексом body_idx.
-    Пропускает пустые параграфы.
+    Проверяет, что элемент с индексом body_idx в body документа
+    находится на новой странице.
     """
     body_elems = list(doc.element.body)
-    total = len(body_elems)
+    # Если это самый первый элемент — он всегда на новой странице
+    if body_idx == start_body_pos:
+        return True
+
+    # Идём назад, пропуская пустые параграфы
     for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
 
-        # Проверка разрыва раздела (sectPr)
+        # --- 1. Прямой потомок body: <w:sectPr> (только последний раздел) ---
         if elem.tag == qn('w:sectPr'):
-            # последний sectPr в документе не является разрывом
-            if i < total - 1:
-                type_elem = elem.find(qn('w:type'))
-                if type_elem is not None:
-                    val = type_elem.get(qn('w:val'))
-                    if val == 'continuous':
-                        # непрерывный разрыв не начинает новую страницу
-                        continue
-                # отсутствие типа или тип nextPage/evenPage/oddPage – это разрыв страницы
-                return True
-            else:
-                # Это последний sectPr в body, игнорируем
+            # Последний sectPr в документе — это не разрыв перед чем-то
+            if i == len(body_elems) - 1:
                 continue
+            type_el = elem.find(qn('w:type'))
+            val = type_el.get(qn('w:val')) if type_el is not None else None
+            if val == 'continuous':
+                continue          # непрерывный разрыв — ищем дальше
+            # nextPage, evenPage, oddPage или отсутствие типа = разрыв страницы
+            return True
 
-        # Проверка разрыва страницы внутри параграфа
+        # --- 2. Параграф ---
         if elem.tag == qn('w:p'):
-            for br in elem.findall('.//w:br', {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+            # 2a. Явный разрыв страницы внутри параграфа
+            for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
-            # Если параграф не пуст, дальше не идём – разрыва нет
-            text = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-            if text:
-                return False
 
-        # Таблица без предшествующего разрыва – контент
+            # 2b. Разрыв раздела внутри w:pPr/w:sectPr
+            pPr = elem.find(qn('w:pPr'))
+            if pPr is not None:
+                sectPr = pPr.find(qn('w:sectPr'))
+                if sectPr is not None:
+                    type_el = sectPr.find(qn('w:type'))
+                    val = type_el.get(qn('w:val')) if type_el is not None else None
+                    if val == 'continuous':
+                        # непрерывный разрыв, НЕ начинает новую страницу,
+                        # но сам параграф мог быть непустым — проверяем текст
+                        pass
+                    else:
+                        # nextPage, evenPage, oddPage или отсутствует — это разрыв
+                        return True
+
+            # 2c. Проверка на непустой параграф
+            # Если параграф содержит текст, картинку и т.п. — дальше разрыва нет
+            if has_content(elem):
+                return False
+            # иначе параграф пустой — пропускаем, идём дальше
+
+        # --- 3. Таблица ---
         if elem.tag == qn('w:tbl'):
+            # Таблица считается контентом, перед которым нет разрыва
             return False
 
+    # Дошли до начала и не встретили ни контента, ни разрыва
+    return True
+
+def has_content(elem):
+    """Проверяет, содержит ли параграф значимый контент (текст, рисунки)."""
+    # наличие текста
+    texts = [node.text or '' for node in elem.iter() if node.tag == qn('w:t')]
+    if any(t.strip() for t in texts):
+        return True
+    # наличие рисунков, полей и т.п. можно добавить по необходимости
+    if elem.find('.//w:drawing', NSMAP) is not None:
+        return True
     return False
 
 def check_word_document(file):
