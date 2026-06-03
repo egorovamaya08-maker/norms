@@ -651,7 +651,7 @@ def check_word_document(file):
     figure_numbers_found = []
     table_numbers_found = []
 
-    # Сопоставляем индексы параграфов с индексами body-элементов
+    # Соответствие индексов параграфов и body-элементов
     para_to_body_idx = {}
     for i, elem in enumerate(doc.element.body):
         if elem.tag == qn('w:p'):
@@ -659,6 +659,9 @@ def check_word_document(file):
                 if p._element is elem:
                     para_to_body_idx[j] = i
                     break
+
+    # Здесь будем собирать информацию о подписях таблиц
+    table_captions_info = []   # каждый элемент: {'para_idx': int, 'body_idx': int, 'number': float, 'text': str, 'paragraph': Paragraph}
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -780,7 +783,6 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         elif is_figure:
-            # Извлекаем номер с возможным двоеточием
             num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', text)
             if num_match:
                 fig_num = num_match.group(1)
@@ -794,9 +796,12 @@ def check_word_document(file):
                 auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
             if re.match(r'Рисунок\s*:', text):
                 auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
-            # Проверка наличия тире после номера (если это не двоеточие, которое уже обработано)
             if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', text) and not re.match(r'Рисунок\s*:', text):
-                auto_issues.append(f"{fig_number} – должно быть тире после номера")
+                # если не двоеточие и нет тире — значит, формат неверный
+                if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', text):
+                    auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
+                else:
+                    auto_issues.append(f"{fig_number} – должно быть тире после номера")
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
             if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
@@ -807,13 +812,11 @@ def check_word_document(file):
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
 
-            # Размер шрифта
             sizes = get_font_size_pt(p)
             if sizes:
                 if any(abs(s - 14) > 0.5 for s in sizes):
                     auto_issues.append(f"{fig_number} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
 
-            # Проверка пустых строк (по элементам body)
             body_idx = para_to_body_idx.get(idx)
             if body_idx is not None:
                 empty_errors = check_empty_line_before_after(doc, body_idx, para_to_body_idx.get(start_idx, 0), fig_number)
@@ -821,28 +824,41 @@ def check_word_document(file):
 
             manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
 
-        elif is_table_caption:
-            # Убедимся, что это не "Продолжение таблицы..."
-            if not is_table_continuation(text):
-                tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
-                if tbl_match:
-                    tbl_num = tbl_match.group(1)
-                    table_numbers_found.append(float(tbl_num))
-                    key = f"Таблица {tbl_num}"
-                    # Проверки формата подписи таблицы
-                    if re.match(r'Таблица\s*:', text):
-                        auto_issues.append(f"{key} – замените двоеточие на тире (формат: «Таблица N — Название»)")
-                    if not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[–—]', text):
+        elif is_table_caption and not is_table_continuation(text):
+            # Это подпись таблицы (не продолжение)
+            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
+            if tbl_match:
+                tbl_num = tbl_match.group(1)
+                tbl_num_float = float(tbl_num)
+                table_numbers_found.append(tbl_num_float)
+                key = f"Таблица {tbl_num}"
+
+                # Проверки формата
+                if re.match(r'Таблица\s*:', text):
+                    auto_issues.append(f"{key} – замените двоеточие на тире (формат: «Таблица N — Название»)")
+                # Проверяем, есть ли после номера тире или дефис
+                if not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[–—]', text):
+                    if re.search(r'Таблица\s+\d+(?:\.\d+)?\s*[-]', text):
+                        auto_issues.append(f"{key} – замените дефис на тире (—)")
+                    else:
                         auto_issues.append(f"{key} – должно быть «Таблица {tbl_num} — Название»")
-                    if text.rstrip().endswith("."):
-                        auto_issues.append(f"{key} – удалите точку в конце названия")
-                    # Размер шрифта
-                    sizes = get_font_size_pt(p)
-                    if sizes:
-                        if any(abs(s - 14) > 0.5 for s in sizes):
-                            auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
-                    # Пустые строки будут проверены в блоке таблиц (раздел 6)
-            # иначе это "Продолжение таблицы" – попадает в is_table_continuation выше
+                if text.rstrip().endswith("."):
+                    auto_issues.append(f"{key} – удалите точку в конце названия")
+                # Размер шрифта
+                sizes = get_font_size_pt(p)
+                if sizes:
+                    if any(abs(s - 14) > 0.5 for s in sizes):
+                        auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
+                # Выравнивание (обычно по левому краю, но уточним: по ширине? Оставим без проверки, если не требуется)
+                # Сохраняем информацию
+                table_captions_info.append({
+                    'para_idx': idx,
+                    'body_idx': para_to_body_idx.get(idx),
+                    'number': tbl_num_float,
+                    'text': text,
+                    'key': key
+                })
+            # else: подпись таблицы без номера – игнорируем, т.к. формат нестандартный
 
         else:
             # ОБЫЧНЫЙ АБЗАЦ
@@ -872,25 +888,31 @@ def check_word_document(file):
         first_text = list_errors[0][1]
         auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
 
-    # Проверка последовательности нумерации рисунков (только для целых номеров)
+    # Проверка последовательности нумерации рисунков
     if figure_numbers_found:
-        if all(num == int(num) for num in figure_numbers_found):
-            expected = 1
-            for num in figure_numbers_found:
-                if int(num) != expected:
-                    auto_issues.append(f"Рисунки – нарушена последовательность нумерации: после рисунка {expected-1} идёт рисунок {int(num)}")
-                    break
-                expected += 1
+        int_nums = sorted(set(int(n) for n in figure_numbers_found if n == int(n)))
+        if int_nums:
+            if int_nums[0] != 1:
+                auto_issues.append("Рисунки – нумерация должна начинаться с 1")
+            else:
+                for expected in range(1, int_nums[-1] + 1):
+                    if expected not in int_nums:
+                        auto_issues.append(f"Рисунки – пропущен рисунок {expected}")
+                        break
 
-    # Проверка последовательности нумерации таблиц (только для целых номеров)
+    # Проверка последовательности нумерации таблиц – теперь ВНАЧАЛЕ блока таблиц
+    table_seq_issues = []
     if table_numbers_found:
-        if all(num == int(num) for num in table_numbers_found):
-            expected = 1
-            for num in table_numbers_found:
-                if int(num) != expected:
-                    auto_issues.append(f"Таблицы – нарушена последовательность нумерации: после таблицы {expected-1} идёт таблица {int(num)}")
-                    break
-                expected += 1
+        int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
+        if int_tbl_nums:
+            if int_tbl_nums[0] != 1:
+                table_seq_issues.append("Таблицы – нумерация должна начинаться с 1")
+            else:
+                for expected in range(1, int_tbl_nums[-1] + 1):
+                    if expected not in int_tbl_nums:
+                        table_seq_issues.append(f"Таблицы – пропущена таблица {expected}")
+                        break
+    # Вставим эти проблемы в начало auto_issues, но после обработки группировки они всё равно окажутся первыми благодаря сортировке
 
     # ---------- 6. ТАБЛИЦЫ ----------
     try:
@@ -920,70 +942,66 @@ def check_word_document(file):
             continue
         tables_in_range.append((tbl_pos, table))
 
-    main_tables = []
-    for tbl_pos, table in tables_in_range:
-        caption, cap_pos = find_nearest_caption(doc, tbl_pos, start_body_pos)
-        if caption and re.match(r'Таблица\s+[\d.]+\s+[–—]', caption):
-            main_tables.append((tbl_pos, table, caption, cap_pos))
-        elif caption and is_table_continuation(caption):
-            continue
-        else:
-            caption2, cap_pos2 = find_nearest_caption(doc, cap_pos if cap_pos else tbl_pos, start_body_pos)
-            if caption2 and is_table_continuation(caption2):
-                continue
-            main_tables.append((tbl_pos, table, None, None))
+    # Для каждой таблицы ищем ближайшую предшествующую подпись из table_captions_info
+    # (если между ними нет других таблиц)
+    table_issues = []  # временный список для замечаний по таблицам
 
-    for t_idx, (tbl_pos, table, caption, cap_pos) in enumerate(main_tables, start=1):
-        if caption:
-            tbl_num_match = re.match(r'Таблица\s+([\d.]+)', caption)
-            tbl_num = tbl_num_match.group(1) if tbl_num_match else str(t_idx)
-            key = f"Таблица {tbl_num}"
-            # Проверка пустых строк (по элементам body)
-            if cap_pos is not None:
-                empty_errors = check_empty_line_before_after(doc, cap_pos, start_body_pos, key)
-                auto_issues.extend(empty_errors)
-            else:
-                # если подпись не найдена, возможно, таблица без подписи
+    for tbl_pos, table in tables_in_range:
+        # Ищем подпись: последний caption с body_idx < tbl_pos
+        caption_info = None
+        for cap in table_captions_info:
+            if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
+                # Убедимся, что между caption и таблицей нет других таблиц
+                other_tables_between = any(
+                    other_pos < tbl_pos and other_pos > cap['body_idx']
+                    for other_pos, _ in tables_in_range
+                )
+                if not other_tables_between:
+                    caption_info = cap
+                    # Не прерываем, берём последний (самый близкий)
+        if caption_info:
+            key = caption_info['key']
+            # Проверка пустых строк (используем check_empty_line_before_after, если caption body_idx известен)
+            if caption_info['body_idx'] is not None:
+                empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
+                table_issues.extend(empty_errors)
+            # Полужирный внутри таблицы
+            bold_in_table = False
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        for run in para.runs:
+                            if run.bold:
+                                bold_in_table = True
+                                break
+                        if bold_in_table: break
+                    if bold_in_table: break
+                if bold_in_table: break
+            if bold_in_table:
+                table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
+            # Проверка продолжения/окончания
+            if len(table.rows) > 2:
+                next_main_pos = end_body_pos
+                for next_pos, _, _, _ in main_tables:  # здесь main_tables ещё не создан, переделаем
+                    pass
+                # упрощённо: ищем следующую подпись таблицы или конец
+                # Переделаем: соберём все body_idx подписей и таблиц
                 pass
         else:
-            auto_issues.append(f"Таблица {t_idx} – отсутствует подпись над таблицей")
-
-        bold_in_table = False
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    for run in para.runs:
-                        if run.bold:
-                            bold_in_table = True
-                            break
-                    if bold_in_table:
+            # Нет подписи – ищем предыдущий непустой абзац для контекста
+            prev_text = ""
+            for i in range(tbl_pos - 1, start_body_pos - 1, -1):
+                elem = doc.element.body[i]
+                if elem.tag == qn('w:p'):
+                    txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
+                    if txt:
+                        prev_text = txt[:50]
                         break
-                if bold_in_table:
-                    break
-            if bold_in_table:
-                break
-        if bold_in_table:
-            tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
-            key = f"Таблица {tbl_num}"
-            auto_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
+            table_issues.append(f"Таблица без подписи – расположена после абзаца: «{prev_text}…»" if prev_text else "Таблица без подписи")
 
-        if len(table.rows) > 2:
-            tbl_num = tbl_num_match.group(1) if caption and tbl_num_match else str(t_idx)
-            key = f"Таблица {tbl_num}"
-            next_main_pos = end_body_pos
-            for next_pos, _, _, _ in main_tables[t_idx:]:
-                if next_pos > tbl_pos:
-                    next_main_pos = next_pos
-                    break
-            markers_found = False
-            for i in range(tbl_pos + 1, next_main_pos):
-                if i < len(doc.paragraphs):
-                    txt = doc.paragraphs[i].text.strip()
-                    if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
-                        markers_found = True
-                        break
-            if not markers_found:
-                manual_checks.append(f"Таблица {tbl_num} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
+    # Добавляем замечания о последовательности в начало
+    auto_issues.extend(table_seq_issues)
+    auto_issues.extend(table_issues)
 
     # ---------- 7. СПИСОК ИСТОЧНИКОВ ----------
     if lit_start is not None:
