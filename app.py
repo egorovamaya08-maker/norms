@@ -6,7 +6,7 @@ import re
 from collections import defaultdict, Counter
 import zipfile
 from lxml import etree
-
+NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 # ------------------------------------------------------------
 # Вспомогательные функции (часть не изменилась)
 # ------------------------------------------------------------
@@ -867,7 +867,7 @@ def check_word_document(file):
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
                 if body_idx is not None:
-                    if not has_page_break_before(doc, body_idx, start_body_pos):
+                    if not is_on_new_page(doc, body_idx, start_body_pos):
                         auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
             first_line = get_effective_first_line_indent(p)
             if abs(first_line) > 0.1:
