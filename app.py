@@ -584,7 +584,7 @@ def check_word_document(file):
     prev_was_formula = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
-    indent_issues = []          # <-- собираем ошибки отступа обычных абзацев
+    indent_issues = []
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
@@ -698,7 +698,7 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             if not is_paragraph_bold(p):
                 auto_issues.append(f"{key} – заголовок должен быть полужирным")
-            if alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:          # <-- новая проверка
+            if alignment != WD_ALIGN_PARAGRAPH.JUSTIFY:
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
@@ -726,9 +726,14 @@ def check_word_document(file):
                 title = m.group(1).strip()
                 if title and title[0].islower():
                     auto_issues.append(f"{fig_number} – название должно начинаться с большой буквы")
-            manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
+
+            # Проверка пустых строк до и после подписи
+            if idx > start_idx and not is_empty_paragraph(doc.paragraphs[idx - 1]):
+                auto_issues.append(f"{fig_number} – добавьте пустую строку перед подписью рисунка")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                manual_checks.append(f"{fig_number} – проверьте наличие пустой строки после рисунка")
+                auto_issues.append(f"{fig_number} – добавьте пустую строку после подписи рисунка")
+
+            manual_checks.append(f"{fig_number} – проверьте формат подписи к рисунку")
 
         elif is_table_caption:
             pass
@@ -738,7 +743,6 @@ def check_word_document(file):
             key = text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
-                # Сохраняем ошибку отступа, но не выводим сразу
                 indent_issues.append((key, first_line))
             if pf.space_before and pf.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
