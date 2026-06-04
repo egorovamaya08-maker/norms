@@ -78,12 +78,6 @@ def is_empty_paragraph(paragraph):
 def has_page_number(text):
     return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
 
-def is_all_caps(text):
-    clean_text = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
-    if not clean_text:
-        return False
-    return clean_text == clean_text.upper()
-
 def is_section_header(text):
     """Заголовок раздела первого уровня:
     - ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
@@ -105,21 +99,18 @@ def is_section_header(text):
         return True
     
     # Текстовый заголовок ЗАГЛАВНЫМИ БУКВАМИ (не содержит строчных букв)
-    # Убираем цифры, пробелы, знаки препинания
     only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
     if only_letters and len(only_letters) > 3:
-        # Проверяем, что все буквы заглавные
         if only_letters == only_letters.upper():
             return True
     
     return False
 
 def is_subsection_header(text):
-    """Подраздел вида 1.1 Текст, 1.1.1 Текст (именно такие форматы)"""
+    """Подраздел вида 1.1 Текст, 1.1.1 Текст"""
     cleaned = text.strip()
     if not cleaned:
         return False
-    # Шаблон: цифра, точка, цифра, пробел, буква (русская или английская)
     if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-яA-Za-z]', cleaned):
         return True
     return False
@@ -692,76 +683,6 @@ def has_content(elem):
     return False
 
 # ------------------------------------------------------------
-# Функция анализа подразделов (тестовый модуль)
-# ------------------------------------------------------------
-def analyze_subsections(doc):
-    """Анализирует подразделы и определяет, нужно ли убирать пустую строку"""
-    results = []
-    
-    # Проходим по всем параграфам и запоминаем, какие из них пустые
-    is_empty = [False] * len(doc.paragraphs)
-    for idx, para in enumerate(doc.paragraphs):
-        if not para.text.strip():
-            is_empty[idx] = True
-    
-    # Анализируем подразделы
-    prev_nonempty_was_section = False
-    prev_nonempty_text = ""
-    
-    for idx, para in enumerate(doc.paragraphs):
-        text = para.text.strip()
-        if not text:
-            continue
-        
-        is_section = is_section_header(text)
-        is_sub = is_subsection_header(text)
-        
-        if is_sub:
-            # Ищем предыдущий НЕПУСТОЙ параграф (пропуская пустые)
-            prev_nonempty_idx = idx - 1
-            while prev_nonempty_idx >= 0 and is_empty[prev_nonempty_idx]:
-                prev_nonempty_idx -= 1
-            
-            # Проверяем, есть ли пустые параграфы между предыдущим непустым и текущим
-            has_empty_between = False
-            for j in range(prev_nonempty_idx + 1, idx):
-                if is_empty[j]:
-                    has_empty_between = True
-                    break
-            
-            # Получаем текст предыдущего непустого параграфа
-            prev_text = doc.paragraphs[prev_nonempty_idx].text.strip() if prev_nonempty_idx >= 0 else ""
-            
-            # Проверяем, не является ли предыдущий текст техническим (продолжение таблицы и т.д.)
-            is_technical = bool(re.search(r'(?:Продолжение|Окончание)\s+таблицы', prev_text, re.IGNORECASE))
-            
-            # Ошибка: есть пустые строки между И предыдущий непустой НЕ был разделом
-            # И предыдущий текст НЕ является техническим
-            error_condition = has_empty_between and prev_nonempty_idx >= 0 and not prev_nonempty_was_section and not is_technical
-            
-            results.append({
-                "index": idx,
-                "text": text[:80],
-                "has_empty_before": has_empty_between,
-                "prev_was_section": prev_nonempty_was_section,
-                "prev_text": prev_nonempty_text[:60] if prev_nonempty_text else "—",
-                "is_technical_prev": is_technical,
-                "error_should_show": error_condition,
-                "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
-            })
-        
-        # Обновляем состояние для следующего подраздела
-        if is_section:
-            prev_nonempty_was_section = True
-        else:
-            prev_nonempty_was_section = False
-        
-        if text:
-            prev_nonempty_text = text
-    
-    return results
-
-# ------------------------------------------------------------
 # Главная проверка документа
 # ------------------------------------------------------------
 def check_word_document(file):
@@ -1062,8 +983,23 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            # Исправленная логика: пустая строка только если перед этим НЕ было раздела
-            if prev_para_empty and not prev_nonempty_was_section_header:
+            
+            # Проверяем наличие реальной пустой строки перед подразделом
+            has_empty_before = False
+            if idx > 0:
+                prev_para = doc.paragraphs[idx - 1]
+                if is_empty_paragraph(prev_para):
+                    has_empty_before = True
+            
+            # Проверяем, не является ли предыдущий текст техническим (продолжение/окончание таблицы)
+            is_technical_prev = False
+            if idx > 0:
+                prev_text = doc.paragraphs[idx - 1].text.strip()
+                if re.search(r'(?:Продолжение|Окончание)\s+таблицы', prev_text, re.IGNORECASE):
+                    is_technical_prev = True
+            
+            # Ошибка: есть пустая строка И перед этим не было раздела И предыдущий текст не технический
+            if has_empty_before and not prev_nonempty_was_section_header and not is_technical_prev:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         # Сброс флагов
@@ -1230,83 +1166,21 @@ def check_word_document(file):
     return group_issues(all_issues)
 
 # ------------------------------------------------------------
-# Функция для тестового режима (анализ подразделов)
-# ------------------------------------------------------------
-def run_subsections_test(file):
-    """Запускает тестовый анализ подразделов"""
-    doc = docx.Document(file)
-    subsections = analyze_subsections(doc)
-    return subsections
-
-# ------------------------------------------------------------
 # ИНТЕРФЕЙС STREAMLIT
 # ------------------------------------------------------------
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
 
-# Создаем вкладки
-tab1, tab2 = st.tabs(["📊 Полная проверка документа", "🔍 Тест: анализ подразделов"])
+st.title("📊 Автоматическая проверка документов Word")
+st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
 
-with tab1:
-    st.title("📊 Автоматическая проверка документов Word")
-    st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
-    uploaded_file = st.file_uploader("Выберите файл", type=["docx"], key="full_check")
+uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
 
-    if uploaded_file is not None:
-        with st.spinner("Проверяем..."):
-            results = check_word_document(uploaded_file)
-        st.subheader("Результаты проверки:")
-        for r in results:
-            if r.startswith("📋"):
-                st.markdown(f"**{r}**")
-            else:
-                st.write(f"• {r}")
-
-with tab2:
-    st.title("🔍 Тест определения подразделов и пустых строк")
-    st.markdown("Загрузите документ .docx – программа покажет, для каких подразделов ошибочно требуется убрать пустую строку.")
-    
-    test_file = st.file_uploader("Выберите файл .docx", type=["docx"], key="test_check")
-
-    if test_file is not None:
-        try:
-            subsections = run_subsections_test(test_file)
-
-            if not subsections:
-                st.info("В документе не найдено подразделов с номерами вида 1.1, 1.2 и т.д.")
-            else:
-                st.subheader("Результаты анализа")
-                st.write(f"Всего подразделов: {len(subsections)}")
-
-                with_error = [s for s in subsections if s["error_should_show"]]
-                without_error = [s for s in subsections if not s["error_should_show"]]
-
-                if with_error:
-                    st.error(f"❌ {len(with_error)} подраздел(ов), перед которыми пустая строка НЕ после раздела (нужно убрать):")
-                    for s in with_error:
-                        st.markdown(f"- **{s['text']}**")
-                        st.caption(f"  Пустая строка перед: {s['has_empty_before']}, предыдущий непустой был разделом: {s['prev_was_section']} (текст: «{s['prev_text']}»)")
-                else:
-                    st.success("✅ Нет ошибочных требований убрать пустую строку перед подразделами.")
-
-                if without_error:
-                    st.info(f"ℹ️ {len(without_error)} подраздел(ов) с корректным расположением (пустая строка либо отсутствует, либо после раздела):")
-                    for s in without_error[:10]:
-                        st.markdown(f"- **{s['text']}**")
-                        st.caption(f"  Пустая строка перед: {s['has_empty_before']}, предыдущий раздел: {s['prev_was_section']}")
-                    if len(without_error) > 10:
-                        st.caption(f"... и ещё {len(without_error)-10} подразделов.")
-
-                with st.expander("📋 Детальная информация по каждому подразделу"):
-                    for s in subsections:
-                        status = "🔴 ОШИБКА" if s["error_should_show"] else "🟢 ОК"
-                        st.write(f"{status}: {s['text']}")
-                        st.write(f"   - Индекс параграфа: {s['index']}")
-                        st.write(f"   - Пустая строка перед: {s['has_empty_before']}")
-                        st.write(f"   - Предыдущий непустой был разделом: {s['prev_was_section']}")
-                        st.write(f"   - Текст предыдущего: «{s['prev_text']}»")
-                        st.write("---")
-
-        except Exception as e:
-            st.error(f"Ошибка: {e}")
-    else:
-        st.info("Загрузите файл .docx для анализа.")
+if uploaded_file is not None:
+    with st.spinner("Проверяем..."):
+        results = check_word_document(uploaded_file)
+    st.subheader("Результаты проверки:")
+    for r in results:
+        if r.startswith("📋"):
+            st.markdown(f"**{r}**")
+        else:
+            st.write(f"• {r}")
