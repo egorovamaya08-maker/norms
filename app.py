@@ -240,134 +240,6 @@ def get_effective_first_line_indent(paragraph):
     # Если в XML нет явного отступа, возвращаем 0
     return 0.0
 
-def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """Проверяет, начинается ли элемент с новой страницы
-    Использует косвенные признаки для документов, сконвертированных из ODT
-    """
-    body_elems = list(doc.element.body)
-    if body_idx == start_body_pos:
-        return True
-    
-    # 1. Проверка явных признаков разрыва страницы
-    for i in range(body_idx, start_body_pos - 1, -1):
-        if i < 0:
-            break
-            
-        elem = body_elems[i]
-        
-        # Проверка разрыва раздела
-        if elem.tag == qn('w:sectPr'):
-            if i == len(body_elems) - 1:
-                continue
-            type_el = elem.find(qn('w:type'))
-            val = type_el.get(qn('w:val')) if type_el is not None else None
-            if val != 'continuous':
-                return True
-        
-        if elem.tag == qn('w:p'):
-            # Явный разрыв страницы
-            for br in elem.findall('.//w:br', NSMAP):
-                if br.get(qn('w:type')) == 'page':
-                    return True
-            
-            # pageBreakBefore
-            pPr = elem.find(qn('w:pPr'))
-            if pPr is not None:
-                if pPr.find(qn('w:pageBreakBefore')) is not None:
-                    return True
-                
-                sectPr = pPr.find(qn('w:sectPr'))
-                if sectPr is not None:
-                    type_el = sectPr.find(qn('w:type'))
-                    val = type_el.get(qn('w:val')) if type_el is not None else None
-                    if val != 'continuous':
-                        return True
-    
-    # 2. КОСВЕННЫЕ ПРИЗНАКИ: если элемент является заголовком раздела,
-    #    и перед ним нет другого заголовка раздела на той же странице
-    #    (для документов, сконвертированных из ODT)
-    
-    # Находим индекс текущего параграфа в документе
-    current_idx = None
-    for i, p in enumerate(doc.paragraphs):
-        if p._element == body_elems[body_idx]:
-            current_idx = i
-            break
-    
-    if current_idx is not None and current_idx > 0:
-        # Ищем предыдущий заголовок раздела
-        prev_section_idx = None
-        for i in range(current_idx - 1, -1, -1):
-            p = doc.paragraphs[i]
-            text = p.text.strip()
-            if text and is_section_header(text):
-                prev_section_idx = i
-                break
-        
-        # Если предыдущий заголовок существует, проверяем расстояние между ними
-        if prev_section_idx is not None:
-            # Считаем количество непустых параграфов между заголовками
-            non_empty_count = 0
-            for i in range(prev_section_idx + 1, current_idx):
-                if doc.paragraphs[i].text.strip():
-                    non_empty_count += 1
-            
-            # Если между заголовками мало непустого текста, вероятно они на разных страницах
-            # (обычно на одной странице помещается больше 20-30 строк текста)
-            if non_empty_count < 15:
-                # Дополнительная проверка: есть ли разрыв по номеру страницы?
-                # Эту информацию можно получить из layout, но это сложно
-                # Поэтому считаем, что если мало текста между заголовками - они на разных страницах
-                return True
-    
-    # 3. Проверка по пустым строкам (если много пустых строк, возможно новая страница)
-    blank_count = 0
-    for i in range(body_idx - 1, start_body_pos - 1, -1):
-        elem = body_elems[i]
-        if elem.tag == qn('w:p'):
-            if has_content(elem):
-                if blank_count >= min_empty_paragraphs:
-                    return True
-                break
-            else:
-                blank_count += 1
-                continue
-        if elem.tag == qn('w:tbl'):
-            if blank_count >= min_empty_paragraphs:
-                return True
-            break
-    
-    return False
-
-def get_alignment_from_xml(paragraph):
-    """Получает выравнивание из XML напрямую"""
-    try:
-        pPr = paragraph._element.find(qn('w:pPr'))
-        if pPr is not None:
-            jc = pPr.find(qn('w:jc'))
-            if jc is not None:
-                val = jc.get(qn('w:val'))
-                if val == 'center':
-                    return WD_ALIGN_PARAGRAPH.CENTER
-                elif val == 'right':
-                    return WD_ALIGN_PARAGRAPH.RIGHT
-                elif val == 'left':
-                    return WD_ALIGN_PARAGRAPH.LEFT
-                elif val == 'both':
-                    return WD_ALIGN_PARAGRAPH.JUSTIFY
-    except:
-        pass
-    
-    # Проверяем стиль
-    try:
-        style = paragraph.style
-        if style and style.paragraph_format.alignment is not None:
-            return style.paragraph_format.alignment
-    except:
-        pass
-    
-    return paragraph.alignment
-
 def get_effective_left_indent(paragraph):
     pf = paragraph.paragraph_format
     if pf.left_indent is not None:
@@ -775,18 +647,13 @@ def has_content(elem):
     return False
 
 def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """Проверяет, начинается ли элемент с новой страницы
-    Использует косвенные признаки для документов, сконвертированных из ODT
-    """
+    """Проверяет, начинается ли элемент с новой страницы"""
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
     
-    # 1. Проверка явных признаков разрыва страницы
-    for i in range(body_idx, start_body_pos - 1, -1):
-        if i < 0:
-            break
-            
+    blank_count = 0
+    for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
         
         # Проверка разрыва раздела
@@ -799,12 +666,12 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                 return True
         
         if elem.tag == qn('w:p'):
-            # Явный разрыв страницы
+            # Проверка явного разрыва страницы
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
             
-            # pageBreakBefore
+            # Проверка свойства pageBreakBefore у параграфа
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 if pPr.find(qn('w:pageBreakBefore')) is not None:
@@ -816,60 +683,15 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
-    
-    # 2. КОСВЕННЫЕ ПРИЗНАКИ: если элемент является заголовком раздела,
-    #    и перед ним нет другого заголовка раздела на той же странице
-    #    (для документов, сконвертированных из ODT)
-    
-    # Находим индекс текущего параграфа в документе
-    current_idx = None
-    for i, p in enumerate(doc.paragraphs):
-        if p._element == body_elems[body_idx]:
-            current_idx = i
-            break
-    
-    if current_idx is not None and current_idx > 0:
-        # Ищем предыдущий заголовок раздела
-        prev_section_idx = None
-        for i in range(current_idx - 1, -1, -1):
-            p = doc.paragraphs[i]
-            text = p.text.strip()
-            if text and is_section_header(text):
-                prev_section_idx = i
-                break
-        
-        # Если предыдущий заголовок существует, проверяем расстояние между ними
-        if prev_section_idx is not None:
-            # Считаем количество непустых параграфов между заголовками
-            non_empty_count = 0
-            for i in range(prev_section_idx + 1, current_idx):
-                if doc.paragraphs[i].text.strip():
-                    non_empty_count += 1
             
-            # Если между заголовками мало непустого текста, вероятно они на разных страницах
-            # (обычно на одной странице помещается больше 20-30 строк текста)
-            if non_empty_count < 15:
-                # Дополнительная проверка: есть ли разрыв по номеру страницы?
-                # Эту информацию можно получить из layout, но это сложно
-                # Поэтому считаем, что если мало текста между заголовками - они на разных страницах
-                return True
-    
-    # 3. Проверка по пустым строкам (если много пустых строк, возможно новая страница)
-    blank_count = 0
-    for i in range(body_idx - 1, start_body_pos - 1, -1):
-        elem = body_elems[i]
-        if elem.tag == qn('w:p'):
             if has_content(elem):
-                if blank_count >= min_empty_paragraphs:
-                    return True
-                break
+                return blank_count >= min_empty_paragraphs
             else:
                 blank_count += 1
                 continue
+        
         if elem.tag == qn('w:tbl'):
-            if blank_count >= min_empty_paragraphs:
-                return True
-            break
+            return blank_count >= min_empty_paragraphs
     
     return False
 
@@ -880,13 +702,11 @@ def analyze_subsections(doc):
     """Анализирует подразделы и определяет, нужно ли убирать пустую строку"""
     results = []
     
-    # Сначала найдем все индексы пустых параграфов
     empty_paragraph_indices = set()
     for idx, para in enumerate(doc.paragraphs):
         if not para.text.strip():
             empty_paragraph_indices.add(idx)
     
-    # Анализируем подразделы
     prev_nonempty_was_section = False
     prev_nonempty_text = ""
     
@@ -899,10 +719,8 @@ def analyze_subsections(doc):
         is_sub = is_subsection_header(text)
         
         if is_sub:
-            # Проверяем, есть ли пустая строка ПЕРЕД подразделом
             has_empty_before = (idx - 1) in empty_paragraph_indices
             
-            # Проверяем, не является ли предыдущий текст техническим
             is_technical_prev = False
             technical_keywords = [
                 r'(?:Продолжение|Окончание)\s+таблицы',
@@ -916,7 +734,6 @@ def analyze_subsections(doc):
                         is_technical_prev = True
                         break
             
-            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом И не технический
             error_condition = has_empty_before and not prev_nonempty_was_section and not is_technical_prev
             
             results.append({
@@ -930,7 +747,6 @@ def analyze_subsections(doc):
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
         
-        # Обновляем состояние для следующего подраздела
         if is_section:
             prev_nonempty_was_section = True
         else:
@@ -955,14 +771,13 @@ def analyze_section_headers(doc):
             continue
         if has_page_number(txt):
             continue
-        if is_section_header(txt):
+        if txt.upper() == "ВВЕДЕНИЕ":
             start_idx = i
             break
     
     if start_idx is None:
         return results
     
-    # Получаем соответствие параграфов и body элементов
     para_to_body_idx = {}
     body_elems = list(doc.element.body)
     for i, elem in enumerate(body_elems):
@@ -985,37 +800,29 @@ def analyze_section_headers(doc):
             continue
         
         if is_section_header(text):
-            # Получаем фактический отступ первой строки
             first_line = get_effective_first_line_indent(p)
+            alignment = get_effective_alignment(p)
             
-            # Получаем выравнивание
-            alignment = get_alignment_from_xml(p)
-            
-            # Проверяем, начинается ли с новой страницы
             body_idx = para_to_body_idx.get(idx)
             starts_new_page = False
-            
             if body_idx is not None:
                 starts_new_page = is_on_new_page(doc, body_idx, start_body_pos)
                 
-                # Дополнительная проверка: разрыв страницы в стиле
-                if not starts_new_page:
-                    try:
-                        style = p.style
-                        if style and style.paragraph_format.page_break_before:
-                            starts_new_page = True
-                    except:
-                        pass
+                if not starts_new_page and idx > 0:
+                    prev_para = doc.paragraphs[idx - 1]
+                    if hasattr(prev_para, '_element'):
+                        pPr = prev_para._element.find(qn('w:pPr'))
+                        if pPr is not None:
+                            if pPr.find(qn('w:pageBreakBefore')) is not None:
+                                starts_new_page = True
             
-            # Проверяем пустую строку после
             has_empty_after = False
             if idx + 1 < len(doc.paragraphs):
-                if is_empty_paragraph(doc.paragraphs[idx + 1]):
+                next_para = doc.paragraphs[idx + 1]
+                if is_empty_paragraph(next_para):
                     has_empty_after = True
             
-            # Для отступа используем порог 0.1 см (1 мм)
-            # Если отступ меньше 0.1 см, считаем что его нет
-            first_line_ok = abs(first_line) <= 0.1
+            first_line_ok = abs(first_line) <= 0.05
             
             results.append({
                 "index": idx,
@@ -1061,7 +868,7 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        if is_section_header(txt):
+        if txt.upper() == "ВВЕДЕНИЕ":
             start_idx = i
             break
     if start_idx is None:
@@ -1323,9 +1130,10 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
             
+            # Проверка пустой строки после заголовка
             if idx + 1 < len(doc.paragraphs):
                 next_para = doc.paragraphs[idx + 1]
-                if not is_empty_paragraph(next_para):
+                if not is_empty_paragraph(next_para) and not is_section_header(next_para.text.strip()):
                     auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
 
         # === Проверка подразделов ===
@@ -1342,14 +1150,12 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
             
-            # Проверяем наличие реальной пустой строки перед подразделом
             has_empty_before = False
             if idx > 0:
                 prev_para = doc.paragraphs[idx - 1]
                 if is_empty_paragraph(prev_para):
                     has_empty_before = True
             
-            # Проверяем, не является ли предыдущий текст техническим
             is_technical_prev = False
             technical_keywords = [
                 r'(?:Продолжение|Окончание)\s+таблицы',
@@ -1363,7 +1169,6 @@ def check_word_document(file):
                         is_technical_prev = True
                         break
             
-            # Проверяем, находится ли перед подразделом таблица
             is_table_before = False
             if idx > 0:
                 body_idx = para_to_body_idx.get(idx - 1)
@@ -1372,7 +1177,6 @@ def check_word_document(file):
                     if prev_body_elem is not None and prev_body_elem.tag == qn('w:tbl'):
                         is_table_before = True
             
-            # Ищем ПРЕДЫДУЩИЙ НЕПУСТОЙ параграф и проверяем, был ли он разделом
             prev_nonempty_was_section = False
             if idx > 0:
                 for j in range(idx - 1, -1, -1):
@@ -1381,8 +1185,6 @@ def check_word_document(file):
                         prev_nonempty_was_section = is_section_header(prev_para_text)
                         break
             
-            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом 
-            # И не технический И не перед таблицей
             if has_empty_before and not prev_nonempty_was_section and not is_technical_prev and not is_table_before:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
@@ -1427,7 +1229,6 @@ def check_word_document(file):
                 table_seq_issues.append("Таблицы – неверная нумерация")
 
     # --- ТАБЛИЦЫ ---
-        # --- ТАБЛИЦЫ ---
     end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
@@ -1451,14 +1252,12 @@ def check_word_document(file):
         tables_in_range.append((tbl_pos, table))
 
     table_issues = []
+    missing_caption_count = 0
+    
     for tbl_pos, table in tables_in_range:
         caption_info = None
-        
-        # Ищем название таблицы в параграфах ПЕРЕД таблицей
-        # Сначала ищем среди сохраненных названий
         for cap in table_captions_info:
             if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
-                # Проверяем, нет ли другой таблицы между названием и текущей таблицей
                 other_tables_between = any(
                     other_pos < tbl_pos and other_pos > cap['body_idx']
                     for other_pos, _ in tables_in_range
@@ -1467,47 +1266,14 @@ def check_word_document(file):
                     caption_info = cap
                     break
         
-        # Если название не найдено в сохраненных, ищем в параграфах перед таблицей
-        if caption_info is None:
-            for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                if i >= len(body_elems):
-                    continue
-                elem = body_elems[i]
-                if elem.tag == qn('w:p'):
-                    # Находим параграф
-                    for para_idx, para in enumerate(doc.paragraphs):
-                        if para._element == elem:
-                            text = para.text.strip()
-                            # Проверяем, является ли параграф названием таблицы
-                            if re.match(r'^Таблица\s+\d+(?:\.\d+)?\s*[–—]', text, re.IGNORECASE):
-                                # Нашли название таблицы
-                                tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text, re.IGNORECASE)
-                                if tbl_match:
-                                    tbl_num = tbl_match.group(1)
-                                    caption_info = {
-                                        'body_idx': i,
-                                        'number_str': tbl_num,
-                                        'key': f"Таблица {tbl_num}"
-                                    }
-                                break
-                            # Проверяем, не является ли это служебной надписью (окончание/продолжение)
-                            if re.search(r'(?:Продолжение|Окончание)\s+таблицы', text, re.IGNORECASE):
-                                # Это служебная надпись, название может быть дальше
-                                continue
-                            # Если нашли непустой текст, который не является названием таблицы, прекращаем поиск
-                            if text:
-                                break
-                    if caption_info:
-                        break
-        
         if caption_info:
-            key = caption_info['key'] if isinstance(caption_info, dict) else caption_info['key']
-            tbl_num = caption_info['number_str'] if isinstance(caption_info, dict) else caption_info['number_str']
-
+            key = caption_info['key']
+            tbl_num = caption_info['number_str']
+            
             if caption_info.get('body_idx') is not None:
                 empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
                 table_issues.extend(empty_errors)
-
+            
             bold_in_table = False
             for row in table.rows:
                 for cell in row.cells:
@@ -1521,87 +1287,37 @@ def check_word_document(file):
                 if bold_in_table: break
             if bold_in_table:
                 table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
-
+            
             if len(table.rows) > 2:
-                current_tbl_index = None
-                for i, (pos, _) in enumerate(tables_in_range):
-                    if pos == tbl_pos:
-                        current_tbl_index = i
-                        break
-                if current_tbl_index is not None and current_tbl_index + 1 < len(tables_in_range):
-                    next_tbl_pos = tables_in_range[current_tbl_index + 1][0]
-                else:
-                    next_tbl_pos = end_body_pos
                 markers_found = False
-                for i in range(tbl_pos + 1, next_tbl_pos):
-                    if i < len(doc.paragraphs):
-                        txt = doc.paragraphs[i].text.strip()
-                        if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
-                            markers_found = True
-                            break
+                for i in range(tbl_pos + 1, min(tbl_pos + 10, len(doc.paragraphs))):
+                    txt = doc.paragraphs[i].text.strip()
+                    if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
+                        markers_found = True
+                        break
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
-            # Проверяем, не является ли предыдущий текст служебным (Продолжение/Окончание таблицы)
             is_continuation_before = False
-            
-            # Ищем предыдущий параграф перед таблицей
-            for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                if i >= len(body_elems):
-                    continue
-                elem = body_elems[i]
-                if elem.tag == qn('w:p'):
-                    for para_idx, para in enumerate(doc.paragraphs):
-                        if para._element == elem:
-                            txt = para.text.strip()
-                            if txt:
-                                if re.search(r'(?:Продолжение|Окончание)\s+таблицы', txt, re.IGNORECASE):
-                                    is_continuation_before = True
-                                break
-                    break
-            
-            # Если перед таблицей нет служебной надписи, выдаем ошибку
-            if not is_continuation_before:
-                # Проверяем, есть ли хоть какой-то текст перед таблицей
-                has_text_before = False
-                for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                    if i >= len(body_elems):
-                        continue
-                    elem = body_elems[i]
-                    if elem.tag == qn('w:p'):
-                        for para_idx, para in enumerate(doc.paragraphs):
-                            if para._element == elem:
-                                if para.text.strip():
-                                    has_text_before = True
-                                break
+            for i in range(tbl_pos - 1, max(start_body_pos, tbl_pos - 5), -1):
+                if i < len(doc.paragraphs):
+                    txt = doc.paragraphs[i].text.strip()
+                    if txt:
+                        if re.search(r'(?:Продолжение|Окончание)\s+таблицы', txt, re.IGNORECASE):
+                            is_continuation_before = True
                         break
-                
-                if not has_text_before:
-                    table_issues.append("Таблица – добавьте название перед таблицей")
-                else:
-                    # Получаем предыдущий текст для отображения
-                    prev_text = ""
-                    for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                        if i >= len(body_elems):
-                            continue
-                        elem = body_elems[i]
-                        if elem.tag == qn('w:p'):
-                            for para_idx, para in enumerate(doc.paragraphs):
-                                if para._element == elem:
-                                    txt = para.text.strip()
-                                    if txt:
-                                        prev_text = txt[:50]
-                                    break
-                            break
-                    table_issues.append(
-                        f"Таблица – название должно быть перед таблицей (расположена после абзаца: «{prev_text}…»)" if prev_text
-                        else "Таблица – добавьте название перед таблицей"
-                    )
+            
+            if not is_continuation_before:
+                missing_caption_count += 1
+    
+    if missing_caption_count > 0:
+        if missing_caption_count == 1:
+            table_issues.append("Таблица – добавьте название перед таблицей")
+        else:
+            table_issues.append(f"Таблицы ({missing_caption_count} шт.) – добавьте названия перед таблицами")
 
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
-    
-   
 
     # --- СПИСОК ИСТОЧНИКОВ ---
     if lit_start is not None:
@@ -1632,6 +1348,7 @@ def check_word_document(file):
         all_issues.append("📋 Для проверки человеком:")
         all_issues.extend(manual_checks)
     return group_issues(all_issues)
+
 # ------------------------------------------------------------
 # Функции для тестовых режимов
 # ------------------------------------------------------------
