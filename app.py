@@ -241,12 +241,14 @@ def get_effective_first_line_indent(paragraph):
     return 0.0
 
 def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """Проверяет, начинается ли элемент с новой страницы"""
+    """Проверяет, начинается ли элемент с новой страницы
+    Использует косвенные признаки для документов, сконвертированных из ODT
+    """
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
     
-    # Проверяем сам элемент и элементы перед ним
+    # 1. Проверка явных признаков разрыва страницы
     for i in range(body_idx, start_body_pos - 1, -1):
         if i < 0:
             break
@@ -263,48 +265,77 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                 return True
         
         if elem.tag == qn('w:p'):
-            # Проверка явного разрыва страницы
+            # Явный разрыв страницы
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
             
-            # Проверка свойства pageBreakBefore у параграфа
+            # pageBreakBefore
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 if pPr.find(qn('w:pageBreakBefore')) is not None:
                     return True
                 
-                # Проверка sectPr внутри pPr
                 sectPr = pPr.find(qn('w:sectPr'))
                 if sectPr is not None:
                     type_el = sectPr.find(qn('w:type'))
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
+    
+    # 2. КОСВЕННЫЕ ПРИЗНАКИ: если элемент является заголовком раздела,
+    #    и перед ним нет другого заголовка раздела на той же странице
+    #    (для документов, сконвертированных из ODT)
+    
+    # Находим индекс текущего параграфа в документе
+    current_idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if p._element == body_elems[body_idx]:
+            current_idx = i
+            break
+    
+    if current_idx is not None and current_idx > 0:
+        # Ищем предыдущий заголовок раздела
+        prev_section_idx = None
+        for i in range(current_idx - 1, -1, -1):
+            p = doc.paragraphs[i]
+            text = p.text.strip()
+            if text and is_section_header(text):
+                prev_section_idx = i
+                break
+        
+        # Если предыдущий заголовок существует, проверяем расстояние между ними
+        if prev_section_idx is not None:
+            # Считаем количество непустых параграфов между заголовками
+            non_empty_count = 0
+            for i in range(prev_section_idx + 1, current_idx):
+                if doc.paragraphs[i].text.strip():
+                    non_empty_count += 1
             
-            # Проверяем, является ли элемент пустым
-            if not has_content(elem):
+            # Если между заголовками мало непустого текста, вероятно они на разных страницах
+            # (обычно на одной странице помещается больше 20-30 строк текста)
+            if non_empty_count < 15:
+                # Дополнительная проверка: есть ли разрыв по номеру страницы?
+                # Эту информацию можно получить из layout, но это сложно
+                # Поэтому считаем, что если мало текста между заголовками - они на разных страницах
+                return True
+    
+    # 3. Проверка по пустым строкам (если много пустых строк, возможно новая страница)
+    blank_count = 0
+    for i in range(body_idx - 1, start_body_pos - 1, -1):
+        elem = body_elems[i]
+        if elem.tag == qn('w:p'):
+            if has_content(elem):
+                if blank_count >= min_empty_paragraphs:
+                    return True
+                break
+            else:
+                blank_count += 1
                 continue
-            
-            # Если нашли непустой элемент, проверяем, не является ли он на новой странице
-            # из-за большого количества пустых строк
-            blank_count = 0
-            for j in range(i - 1, start_body_pos - 1, -1):
-                prev_elem = body_elems[j]
-                if prev_elem.tag == qn('w:p') and not has_content(prev_elem):
-                    blank_count += 1
-                else:
-                    break
+        if elem.tag == qn('w:tbl'):
             if blank_count >= min_empty_paragraphs:
                 return True
-            
-            # Если это не новый раздел, продолжаем поиск
-            if i < body_idx:
-                continue
-                
-        # Если дошли до начала, возвращаем False
-        if i == start_body_pos:
-            return False
+            break
     
     return False
 
@@ -744,13 +775,18 @@ def has_content(elem):
     return False
 
 def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """Проверяет, начинается ли элемент с новой страницы"""
+    """Проверяет, начинается ли элемент с новой страницы
+    Использует косвенные признаки для документов, сконвертированных из ODT
+    """
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
     
-    blank_count = 0
-    for i in range(body_idx - 1, start_body_pos - 1, -1):
+    # 1. Проверка явных признаков разрыва страницы
+    for i in range(body_idx, start_body_pos - 1, -1):
+        if i < 0:
+            break
+            
         elem = body_elems[i]
         
         # Проверка разрыва раздела
@@ -763,12 +799,12 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                 return True
         
         if elem.tag == qn('w:p'):
-            # Проверка явного разрыва страницы
+            # Явный разрыв страницы
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
             
-            # Проверка свойства pageBreakBefore у параграфа
+            # pageBreakBefore
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 if pPr.find(qn('w:pageBreakBefore')) is not None:
@@ -780,17 +816,62 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
+    
+    # 2. КОСВЕННЫЕ ПРИЗНАКИ: если элемент является заголовком раздела,
+    #    и перед ним нет другого заголовка раздела на той же странице
+    #    (для документов, сконвертированных из ODT)
+    
+    # Находим индекс текущего параграфа в документе
+    current_idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if p._element == body_elems[body_idx]:
+            current_idx = i
+            break
+    
+    if current_idx is not None and current_idx > 0:
+        # Ищем предыдущий заголовок раздела
+        prev_section_idx = None
+        for i in range(current_idx - 1, -1, -1):
+            p = doc.paragraphs[i]
+            text = p.text.strip()
+            if text and is_section_header(text):
+                prev_section_idx = i
+                break
+        
+        # Если предыдущий заголовок существует, проверяем расстояние между ними
+        if prev_section_idx is not None:
+            # Считаем количество непустых параграфов между заголовками
+            non_empty_count = 0
+            for i in range(prev_section_idx + 1, current_idx):
+                if doc.paragraphs[i].text.strip():
+                    non_empty_count += 1
             
+            # Если между заголовками мало непустого текста, вероятно они на разных страницах
+            # (обычно на одной странице помещается больше 20-30 строк текста)
+            if non_empty_count < 15:
+                # Дополнительная проверка: есть ли разрыв по номеру страницы?
+                # Эту информацию можно получить из layout, но это сложно
+                # Поэтому считаем, что если мало текста между заголовками - они на разных страницах
+                return True
+    
+    # 3. Проверка по пустым строкам (если много пустых строк, возможно новая страница)
+    blank_count = 0
+    for i in range(body_idx - 1, start_body_pos - 1, -1):
+        elem = body_elems[i]
+        if elem.tag == qn('w:p'):
             if has_content(elem):
-                return blank_count >= min_empty_paragraphs
+                if blank_count >= min_empty_paragraphs:
+                    return True
+                break
             else:
                 blank_count += 1
                 continue
-        
         if elem.tag == qn('w:tbl'):
-            return blank_count >= min_empty_paragraphs
+            if blank_count >= min_empty_paragraphs:
+                return True
+            break
     
-    return True
+    return False
 
 # ------------------------------------------------------------
 # Функция анализа подразделов (тестовый модуль)
