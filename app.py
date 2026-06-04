@@ -1,6 +1,3 @@
-готовый, близкий, работающий код
-
-
 import streamlit as st
 import docx
 from docx.enum.text import WD_ALIGN_PARAGRAPH
