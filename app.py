@@ -78,21 +78,26 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    """Определяет заголовок раздела первого уровня."""
     cleaned = normalize_text(text)
     if not cleaned:
         return False
     upper_cleaned = cleaned.upper()
+    # Служебные разделы
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
+    # Начинается с "ГЛАВА" или "РАЗДЕЛ"
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
+    # Формат "1. НАЗВАНИЕ" (одна цифра, точка, пробел, заглавные)
     if re.match(r'^\d+\.\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
         if '«' in cleaned or '»' in cleaned:
             return False
         words = cleaned.split()
         if len(words) < 3 and len(cleaned) < 30:
             return False
+        return True
+    # Формат "1.2. НАЗВАНИЕ" (две цифры с точкой) и название целиком заглавное
+    if re.match(r'^\d+\.\d+\.?\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
         return True
     return False
 
