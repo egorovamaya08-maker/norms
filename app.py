@@ -729,27 +729,15 @@ def analyze_subsections(doc):
                     has_empty_between = True
                     break
             
+            # Получаем текст предыдущего непустого параграфа
+            prev_text = doc.paragraphs[prev_nonempty_idx].text.strip() if prev_nonempty_idx >= 0 else ""
+            
+            # Проверяем, не является ли предыдущий текст техническим (продолжение таблицы и т.д.)
+            is_technical = bool(re.search(r'(?:Продолжение|Окончание)\s+таблицы', prev_text, re.IGNORECASE))
+            
             # Ошибка: есть пустые строки между И предыдущий непустой НЕ был разделом
-            # НО: если между ними есть разрыв страницы, то не считаем ошибкой
-            error_condition = False
-            if has_empty_between and prev_nonempty_idx >= 0 and not prev_nonempty_was_section:
-                # Проверяем, нет ли разрыва страницы между параграфами
-                has_page_break = False
-                for j in range(prev_nonempty_idx + 1, idx):
-                    # Проверяем каждый параграф на наличие разрыва страницы
-                    para_to_check = doc.paragraphs[j]
-                    if hasattr(para_to_check, '_element'):
-                        # Проверяем разрыв страницы в самом параграфе
-                        for br in para_to_check._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br'):
-                            if br.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type') == 'page':
-                                has_page_break = True
-                                break
-                        if has_page_break:
-                            break
-                
-                # Только если нет разрыва страницы - выдаем ошибку
-                if not has_page_break:
-                    error_condition = True
+            # И предыдущий текст НЕ является техническим
+            error_condition = has_empty_between and prev_nonempty_idx >= 0 and not prev_nonempty_was_section and not is_technical
             
             results.append({
                 "index": idx,
@@ -757,6 +745,7 @@ def analyze_subsections(doc):
                 "has_empty_before": has_empty_between,
                 "prev_was_section": prev_nonempty_was_section,
                 "prev_text": prev_nonempty_text[:60] if prev_nonempty_text else "—",
+                "is_technical_prev": is_technical,
                 "error_should_show": error_condition,
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
