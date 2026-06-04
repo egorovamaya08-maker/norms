@@ -216,21 +216,10 @@ def get_list_marker_info(paragraph, doc):
     return False, "", True
 
 def get_effective_first_line_indent(paragraph):
-    """Получает эффективный отступ первой строки в см"""
-    # Сначала проверяем явный отступ у параграфа
-    pf = paragraph.paragraph_format
-    if pf.first_line_indent is not None:
-        return pf.first_line_indent.cm
-    
-    # Проверяем стиль
-    try:
-        style = paragraph.style
-        if style and style.paragraph_format.first_line_indent is not None:
-            return style.paragraph_format.first_line_indent.cm
-    except:
-        pass
-    
-    # Проверяем XML напрямую (более точный метод)
+    """Получает эффективный отступ первой строки в см
+    Проверяет только явно заданный отступ в параграфе, игнорируя стиль
+    """
+    # Проверяем XML напрямую - только явный отступ в параграфе
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -238,17 +227,115 @@ def get_effective_first_line_indent(paragraph):
             if ind is not None:
                 first_line = ind.get(qn('w:firstLine'))
                 if first_line is not None:
-                    # Значение в TWIP (twentieths of a point)
-                    # 1 twip = 1/20 point = 1/20 * 1/72 inch = 1/1440 inch
-                    # 1 inch = 2.54 cm
-                    # 1 twip = 2.54 / 1440 см = 0.001763888... см
+                    # Отступ задан явно в параграфе
                     twips = int(first_line)
                     cm = twips * 2.54 / 1440
+                    # Если отступ очень маленький (менее 0.05 см), считаем его нулевым
+                    if abs(cm) < 0.05:
+                        return 0.0
                     return cm
     except:
         pass
     
-    return 0
+    # Если в XML нет явного отступа, возвращаем 0
+    return 0.0
+
+def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
+    """Проверяет, начинается ли элемент с новой страницы"""
+    body_elems = list(doc.element.body)
+    if body_idx == start_body_pos:
+        return True
+    
+    # Проверяем сам элемент и элементы перед ним
+    for i in range(body_idx, start_body_pos - 1, -1):
+        if i < 0:
+            break
+            
+        elem = body_elems[i]
+        
+        # Проверка разрыва раздела
+        if elem.tag == qn('w:sectPr'):
+            if i == len(body_elems) - 1:
+                continue
+            type_el = elem.find(qn('w:type'))
+            val = type_el.get(qn('w:val')) if type_el is not None else None
+            if val != 'continuous':
+                return True
+        
+        if elem.tag == qn('w:p'):
+            # Проверка явного разрыва страницы
+            for br in elem.findall('.//w:br', NSMAP):
+                if br.get(qn('w:type')) == 'page':
+                    return True
+            
+            # Проверка свойства pageBreakBefore у параграфа
+            pPr = elem.find(qn('w:pPr'))
+            if pPr is not None:
+                if pPr.find(qn('w:pageBreakBefore')) is not None:
+                    return True
+                
+                # Проверка sectPr внутри pPr
+                sectPr = pPr.find(qn('w:sectPr'))
+                if sectPr is not None:
+                    type_el = sectPr.find(qn('w:type'))
+                    val = type_el.get(qn('w:val')) if type_el is not None else None
+                    if val != 'continuous':
+                        return True
+            
+            # Проверяем, является ли элемент пустым
+            if not has_content(elem):
+                continue
+            
+            # Если нашли непустой элемент, проверяем, не является ли он на новой странице
+            # из-за большого количества пустых строк
+            blank_count = 0
+            for j in range(i - 1, start_body_pos - 1, -1):
+                prev_elem = body_elems[j]
+                if prev_elem.tag == qn('w:p') and not has_content(prev_elem):
+                    blank_count += 1
+                else:
+                    break
+            if blank_count >= min_empty_paragraphs:
+                return True
+            
+            # Если это не новый раздел, продолжаем поиск
+            if i < body_idx:
+                continue
+                
+        # Если дошли до начала, возвращаем False
+        if i == start_body_pos:
+            return False
+    
+    return False
+
+def get_alignment_from_xml(paragraph):
+    """Получает выравнивание из XML напрямую"""
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            jc = pPr.find(qn('w:jc'))
+            if jc is not None:
+                val = jc.get(qn('w:val'))
+                if val == 'center':
+                    return WD_ALIGN_PARAGRAPH.CENTER
+                elif val == 'right':
+                    return WD_ALIGN_PARAGRAPH.RIGHT
+                elif val == 'left':
+                    return WD_ALIGN_PARAGRAPH.LEFT
+                elif val == 'both':
+                    return WD_ALIGN_PARAGRAPH.JUSTIFY
+    except:
+        pass
+    
+    # Проверяем стиль
+    try:
+        style = paragraph.style
+        if style and style.paragraph_format.alignment is not None:
+            return style.paragraph_format.alignment
+    except:
+        pass
+    
+    return paragraph.alignment
 
 def get_effective_left_indent(paragraph):
     pf = paragraph.paragraph_format
@@ -766,6 +853,7 @@ def analyze_section_headers(doc):
     """Анализирует заголовки разделов и определяет проблемы с отступами и новой страницей"""
     results = []
     
+    # Находим начало основного текста
     start_idx = None
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
@@ -780,6 +868,7 @@ def analyze_section_headers(doc):
     if start_idx is None:
         return results
     
+    # Получаем соответствие параграфов и body элементов
     para_to_body_idx = {}
     body_elems = list(doc.element.body)
     for i, elem in enumerate(body_elems):
@@ -802,37 +891,50 @@ def analyze_section_headers(doc):
             continue
         
         if is_section_header(text):
+            # Получаем фактический отступ первой строки
             first_line = get_effective_first_line_indent(p)
             
+            # Получаем выравнивание
+            alignment = get_alignment_from_xml(p)
+            
+            # Проверяем, начинается ли с новой страницы
             body_idx = para_to_body_idx.get(idx)
             starts_new_page = False
+            
             if body_idx is not None:
                 starts_new_page = is_on_new_page(doc, body_idx, start_body_pos)
                 
-                if not starts_new_page and idx > 0:
-                    prev_para = doc.paragraphs[idx - 1]
-                    if hasattr(prev_para, '_element'):
-                        pPr = prev_para._element.find(qn('w:pPr'))
-                        if pPr is not None:
-                            if pPr.find(qn('w:pageBreakBefore')) is not None:
-                                starts_new_page = True
+                # Дополнительная проверка: разрыв страницы в стиле
+                if not starts_new_page:
+                    try:
+                        style = p.style
+                        if style and style.paragraph_format.page_break_before:
+                            starts_new_page = True
+                    except:
+                        pass
             
+            # Проверяем пустую строку после
             has_empty_after = False
             if idx + 1 < len(doc.paragraphs):
                 if is_empty_paragraph(doc.paragraphs[idx + 1]):
                     has_empty_after = True
             
+            # Для отступа используем порог 0.1 см (1 мм)
+            # Если отступ меньше 0.1 см, считаем что его нет
+            first_line_ok = abs(first_line) <= 0.1
+            
             results.append({
                 "index": idx,
                 "text": text[:80],
                 "first_line_indent_cm": first_line,
-                "first_line_indent_ok": abs(first_line) <= 0.1,
+                "first_line_indent_ok": first_line_ok,
                 "starts_new_page": starts_new_page,
                 "starts_new_page_ok": starts_new_page or text.upper() == "ВВЕДЕНИЕ",
                 "has_empty_after": has_empty_after,
                 "has_empty_after_ok": has_empty_after,
                 "is_bold": is_paragraph_bold(p),
-                "alignment": get_effective_alignment(p)
+                "alignment": alignment,
+                "alignment_ok": alignment == WD_ALIGN_PARAGRAPH.CENTER
             })
     
     return results
