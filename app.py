@@ -82,7 +82,6 @@ def is_section_header(text):
     if not cleaned:
         return False
     upper_cleaned = cleaned.upper()
-    
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
     if re.search(r'СПИСКО?К?\s+ИСПОЛЬЗОВАНН?О?Й?\s+ЛИТЕРАТУРЫ?', upper_cleaned):
@@ -796,7 +795,8 @@ def check_word_document(file):
     figure_counter = 0
     prev_para_empty = False
     prev_was_formula = False
-    prev_was_section_header = False   # Флаг, что последний НЕПУСТОЙ абзац был заголовком раздела
+    # Флаг: последний непустой абзац был заголовком раздела (не сбрасывается на пустых)
+    last_nonempty_was_section = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
     indent_issues = []
@@ -849,12 +849,13 @@ def check_word_document(file):
                 if in_toc and len(text) > 20:
                     is_subsection = True
 
-        # ========== КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: обновляем флаг раздела ТОЛЬКО для непустых ==========
+        # Обновляем флаг "последний непустой был разделом"
+        # Это делаем только для непустых абзацев
         if is_level1:
-            prev_was_section_header = True
+            last_nonempty_was_section = True
         elif not is_subsection:
-            # Если это не раздел и не подраздел, то сбрасываем флаг (после обычного текста)
-            prev_was_section_header = False
+            # Если это обычный текст (не раздел и не подраздел), то сбрасываем
+            last_nonempty_was_section = False
 
         # --- ОСНОВНОЙ ТЕКСТ (не заголовки) ---
         if not is_level1 and not is_subsection:
@@ -1072,8 +1073,8 @@ def check_word_document(file):
                     if prev_body_elem is not None and prev_body_elem.tag == qn('w:tbl'):
                         is_table_before = True
 
-            # ========== ИСПОЛЬЗУЕМ prev_was_section_header – он не сбросился на пустых абзацах ==========
-            if has_empty_before and not prev_was_section_header and not is_technical_prev and not is_table_before:
+            # Используем last_nonempty_was_section – он не сбросился на пустых абзацах
+            if has_empty_before and not last_nonempty_was_section and not is_technical_prev and not is_table_before:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         # Сброс флагов для следующей итерации
