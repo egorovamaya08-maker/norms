@@ -82,14 +82,22 @@ def is_section_header(text):
     if not cleaned:
         return False
     upper_cleaned = cleaned.upper()
+    
+    # Служебные
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
+    
+    # Ошибочные варианты
     if re.search(r'СПИСКО?К?\s+ИСПОЛЬЗОВАНН?О?Й?\s+ЛИТЕРАТУРЫ?', upper_cleaned):
         return True
     if re.search(r'СПИСОК\s+ИСТОЧНИКОВ', upper_cleaned):
         return True
+    
+    # ГЛАВА / РАЗДЕЛ
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
+    
+    # Нумерованные (1. НАЗВАНИЕ)
     if re.match(r'^\d+\.\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
         if '«' in cleaned or '»' in cleaned:
             return False
@@ -97,8 +105,17 @@ def is_section_header(text):
         if len(words) < 3 and len(cleaned) < 30:
             return False
         return True
+    
+    # Нумерованные (1.2. НАЗВАНИЕ)
     if re.match(r'^\d+\.\d+\.?\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
         return True
+    
+    # Заголовок без номера, но написан ЗАГЛАВНЫМИ БУКВАМИ
+    only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
+    if only_letters and len(only_letters) > 3 and only_letters == only_letters.upper():
+        if '«' not in cleaned and '»' not in cleaned:
+            return True
+    
     return False
 
 def is_subsection_header(text):
@@ -148,9 +165,13 @@ def get_list_marker_info(paragraph, doc):
     text = paragraph.text.strip()
     if not text:
         return False, "", True
+    
+    # Проверка первого символа
     first_char = text[0] if text else ""
+    
     if is_dash_char(first_char):
         return True, "тире", True
+    
     if re.match(r'^\d+\)\s', text):
         return True, "нумерованный", True
     if re.match(r'^\d+\.\s', text):
@@ -159,10 +180,22 @@ def get_list_marker_info(paragraph, doc):
         return True, "буквенный", True
     if re.match(r'^[a-z]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
+    
     if is_bullet_char(first_char):
         return True, "круглый маркер (•)", False
+    
+    # Проверка, есть ли маркер не первым символом (после пробелов/табуляции)
+    for i, ch in enumerate(text):
+        if ch == ' ' or ch == '\t':
+            continue
+        if is_bullet_char(ch):
+            return True, "круглый маркер (•)", False
+        break
+    
     if is_arrow_char(first_char):
         return True, f"недопустимый маркер (стрелка {first_char})", False
+    
+    # Проверка автоматических маркеров Word
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -205,11 +238,13 @@ def get_list_marker_info(paragraph, doc):
                                                 return True, f"формат '{fmt}'", True
     except:
         pass
+    
     left_indent = get_effective_left_indent(paragraph)
     first_line = get_effective_first_line_indent(paragraph)
     if left_indent > 0.5 and first_line < 0:
         if not re.match(r'[А-Яа-яёЁA-Za-z0-9]', first_char) and first_char != ' ':
             return True, f"недопустимый маркер ({first_char})", False
+    
     return False, "", True
 
 def get_effective_first_line_indent(paragraph):
@@ -795,7 +830,6 @@ def check_word_document(file):
     figure_counter = 0
     prev_para_empty = False
     prev_was_formula = False
-    # Флаг: последний непустой абзац был заголовком раздела (не сбрасывается на пустых)
     last_nonempty_was_section = False
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
@@ -850,11 +884,9 @@ def check_word_document(file):
                     is_subsection = True
 
         # Обновляем флаг "последний непустой был разделом"
-        # Это делаем только для непустых абзацев
         if is_level1:
             last_nonempty_was_section = True
         elif not is_subsection:
-            # Если это обычный текст (не раздел и не подраздел), то сбрасываем
             last_nonempty_was_section = False
 
         # --- ОСНОВНОЙ ТЕКСТ (не заголовки) ---
@@ -987,7 +1019,6 @@ def check_word_document(file):
         if is_level1:
             key = text[:80]
             
-            # Проверка правильности названия списка литературы
             if re.search(r'СПИСКО?К?\s+ИСПОЛЬЗОВАНН?О?Й?\s+ЛИТЕРАТУРЫ?', text.upper()):
                 auto_issues.append(f"«{text}» – исправьте название на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
             
@@ -1073,11 +1104,9 @@ def check_word_document(file):
                     if prev_body_elem is not None and prev_body_elem.tag == qn('w:tbl'):
                         is_table_before = True
 
-            # Используем last_nonempty_was_section – он не сбросился на пустых абзацах
             if has_empty_before and not last_nonempty_was_section and not is_technical_prev and not is_table_before:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
-        # Сброс флагов для следующей итерации
         if text:
             prev_para_empty = False
             prev_was_formula = False
