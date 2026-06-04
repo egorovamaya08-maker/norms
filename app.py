@@ -41,17 +41,14 @@ def get_effective_alignment(paragraph):
     return None
 
 def is_paragraph_bold(paragraph):
-    """Проверяет, является ли параграф полужирным"""
     for run in paragraph.runs:
         if run.bold:
             return True
-    
     try:
         if paragraph.style and paragraph.style.font and paragraph.style.font.bold:
             return True
     except:
         pass
-    
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -59,7 +56,6 @@ def is_paragraph_bold(paragraph):
             if pPr_rPr is not None:
                 if pPr_rPr.find(qn('w:b')) is not None:
                     return True
-        
         for r in paragraph._element.findall(qn('w:r')):
             rPr = r.find(qn('w:rPr'))
             if rPr is not None:
@@ -67,7 +63,6 @@ def is_paragraph_bold(paragraph):
                     return True
     except:
         pass
-    
     return False
 
 def is_empty_paragraph(paragraph):
@@ -77,31 +72,21 @@ def has_page_number(text):
     return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
 
 def is_section_header(text):
-    """Заголовок раздела первого уровня"""
     cleaned = normalize_text(text)
     if not cleaned:
         return False
-    
     upper_cleaned = cleaned.upper()
-    
-    # Служебные разделы
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
-    
-    # Начинается с "ГЛАВА" или "РАЗДЕЛ"
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
-    
-    # Текстовый заголовок ЗАГЛАВНЫМИ БУКВАМИ (длиной более 3 символов)
     only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
     if only_letters and len(only_letters) > 3:
         if only_letters == only_letters.upper():
             return True
-    
     return False
 
 def is_subsection_header(text):
-    """Подраздел вида 1.1 Текст, 1.1.1 Текст"""
     cleaned = text.strip()
     if not cleaned:
         return False
@@ -216,10 +201,7 @@ def get_list_marker_info(paragraph, doc):
     return False, "", True
 
 def get_effective_first_line_indent(paragraph):
-    """Получает эффективный отступ первой строки в см
-    Проверяет только явно заданный отступ в параграфе, игнорируя стиль
-    """
-    # Проверяем XML напрямую - только явный отступ в параграфе
+    # сначала явный отступ в параграфе
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -227,17 +209,12 @@ def get_effective_first_line_indent(paragraph):
             if ind is not None:
                 first_line = ind.get(qn('w:firstLine'))
                 if first_line is not None:
-                    # Отступ задан явно в параграфе
-                    twips = int(first_line)
-                    cm = twips * 2.54 / 1440
-                    # Если отступ очень маленький (менее 0.05 см), считаем его нулевым
+                    cm = int(first_line) * 2.54 / 1440
                     if abs(cm) < 0.05:
                         return 0.0
                     return cm
     except:
         pass
-    
-    # Если в XML нет явного отступа, возвращаем 0
     return 0.0
 
 def get_effective_left_indent(paragraph):
@@ -611,57 +588,24 @@ def get_font_size_pt(paragraph):
             sizes.add(run.font.size.pt)
     return sizes
 
-def check_empty_line_before_after(doc, idx, start_idx, label):
-    errors = []
-    body_elems = list(doc.element.body)
-    if idx > start_idx:
-        prev_elem = body_elems[idx - 1]
-        is_empty_prev = (
-            prev_elem.tag == qn('w:p') and
-            not prev_elem.xpath('string(.)').strip()
-        )
-        if not is_empty_prev:
-            errors.append(f"{label} – добавьте пустую строку перед подписью")
-    if idx + 1 < len(body_elems):
-        next_elem = body_elems[idx + 1]
-        is_empty_next = (
-            next_elem.tag == qn('w:p') and
-            not next_elem.xpath('string(.)').strip()
-        )
-        if not is_empty_next:
-            errors.append(f"{label} – добавьте пустую строку после подписи")
-    return errors
-
 def has_content(elem):
-    """Проверяет, есть ли у элемента реальное содержимое"""
     texts = [node.text or '' for node in elem.iter() if node.tag == qn('w:t')]
     if any(t.strip() for t in texts):
         return True
-    
     if elem.find('.//w:drawing', NSMAP) is not None:
         return True
-    
     if elem.find('.//w:object', NSMAP) is not None:
         return True
-    
     return False
 
 def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """Проверяет, начинается ли элемент с новой страницы
-    Использует косвенные признаки для документов, сконвертированных из ODT
-    """
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
-    
-    # 1. Проверка явных признаков разрыва страницы
     for i in range(body_idx, start_body_pos - 1, -1):
         if i < 0:
             break
-            
         elem = body_elems[i]
-        
-        # Проверка разрыва раздела
         if elem.tag == qn('w:sectPr'):
             if i == len(body_elems) - 1:
                 continue
@@ -669,39 +613,27 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             val = type_el.get(qn('w:val')) if type_el is not None else None
             if val != 'continuous':
                 return True
-        
         if elem.tag == qn('w:p'):
-            # Явный разрыв страницы
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
-            
-            # pageBreakBefore
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 if pPr.find(qn('w:pageBreakBefore')) is not None:
                     return True
-                
                 sectPr = pPr.find(qn('w:sectPr'))
                 if sectPr is not None:
                     type_el = sectPr.find(qn('w:type'))
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
-    
-    # 2. КОСВЕННЫЕ ПРИЗНАКИ: если элемент является заголовком раздела,
-    #    и перед ним нет другого заголовка раздела на той же странице
-    #    (для документов, сконвертированных из ODT)
-    
-    # Находим индекс текущего параграфа в документе
+    # косвенные признаки
     current_idx = None
     for i, p in enumerate(doc.paragraphs):
         if p._element == body_elems[body_idx]:
             current_idx = i
             break
-    
     if current_idx is not None and current_idx > 0:
-        # Ищем предыдущий заголовок раздела
         prev_section_idx = None
         for i in range(current_idx - 1, -1, -1):
             p = doc.paragraphs[i]
@@ -709,21 +641,13 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             if text and is_section_header(text):
                 prev_section_idx = i
                 break
-        
-        # Если предыдущий заголовок существует, проверяем расстояние между ними
         if prev_section_idx is not None:
-            # Считаем количество непустых параграфов между заголовками
             non_empty_count = 0
             for i in range(prev_section_idx + 1, current_idx):
                 if doc.paragraphs[i].text.strip():
                     non_empty_count += 1
-            
-            # Если между заголовками мало непустого текста, вероятно они на разных страницах
-            # (обычно на одной странице помещается больше 20-30 строк текста)
             if non_empty_count < 15:
                 return True
-    
-    # 3. Проверка по пустым строкам (если много пустых строк, возможно новая страница)
     blank_count = 0
     for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
@@ -739,35 +663,62 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             if blank_count >= min_empty_paragraphs:
                 return True
             break
-    
     return False
 
 # ------------------------------------------------------------
-# Функция анализа подразделов (тестовый модуль)
+# Функция проверки пустых строк с учётом новой страницы
+# ------------------------------------------------------------
+def check_empty_line_before_after(doc, idx, start_idx, label):
+    errors = []
+    body_elems = list(doc.element.body)
+    # перед подписью
+    if idx > start_idx:
+        starts_new_page = is_on_new_page(doc, idx, start_idx)
+        if not starts_new_page:
+            prev_elem = body_elems[idx - 1]
+            is_empty_prev = (
+                prev_elem.tag == qn('w:p') and
+                not prev_elem.xpath('string(.)').strip()
+            )
+            if not is_empty_prev:
+                errors.append(f"{label} – добавьте пустую строку перед подписью")
+    # после подписи
+    if idx + 1 < len(body_elems):
+        next_elem = body_elems[idx + 1]
+        is_page_break = False
+        if next_elem.tag == qn('w:p'):
+            for br in next_elem.findall('.//w:br', NSMAP):
+                if br.get(qn('w:type')) == 'page':
+                    is_page_break = True
+                    break
+        if not is_page_break and next_elem.tag != qn('w:tbl'):
+            is_empty_next = (
+                next_elem.tag == qn('w:p') and
+                not next_elem.xpath('string(.)').strip()
+            )
+            if not is_empty_next:
+                errors.append(f"{label} – добавьте пустую строку после подписи")
+    return errors
+
+# ------------------------------------------------------------
+# Анализ подразделов (тестовый модуль)
 # ------------------------------------------------------------
 def analyze_subsections(doc):
-    """Анализирует подразделы и определяет, нужно ли убирать пустую строку"""
     results = []
-    
     empty_paragraph_indices = set()
     for idx, para in enumerate(doc.paragraphs):
         if not para.text.strip():
             empty_paragraph_indices.add(idx)
-    
     prev_nonempty_was_section = False
     prev_nonempty_text = ""
-    
     for idx, para in enumerate(doc.paragraphs):
         text = para.text.strip()
         if not text:
             continue
-        
         is_section = is_section_header(text)
         is_sub = is_subsection_header(text)
-        
         if is_sub:
             has_empty_before = (idx - 1) in empty_paragraph_indices
-            
             is_technical_prev = False
             technical_keywords = [
                 r'(?:Продолжение|Окончание)\s+таблицы',
@@ -780,9 +731,7 @@ def analyze_subsections(doc):
                     if re.search(keyword, prev_text, re.IGNORECASE):
                         is_technical_prev = True
                         break
-            
             error_condition = has_empty_before and not prev_nonempty_was_section and not is_technical_prev
-            
             results.append({
                 "index": idx,
                 "text": text[:80],
@@ -793,24 +742,18 @@ def analyze_subsections(doc):
                 "error_should_show": error_condition,
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
-        
         if is_section:
             prev_nonempty_was_section = True
         else:
             prev_nonempty_was_section = False
-        
         prev_nonempty_text = text
-    
     return results
 
 # ------------------------------------------------------------
-# Функция анализа заголовков разделов (тестовый модуль)
+# Анализ заголовков разделов (тестовый модуль)
 # ------------------------------------------------------------
 def analyze_section_headers(doc):
-    """Анализирует заголовки разделов и определяет проблемы с отступами и новой страницей"""
     results = []
-    
-    # Находим начало основного текста
     start_idx = None
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
@@ -821,10 +764,8 @@ def analyze_section_headers(doc):
         if txt.upper() == "ВВЕДЕНИЕ":
             start_idx = i
             break
-    
     if start_idx is None:
         return results
-    
     para_to_body_idx = {}
     body_elems = list(doc.element.body)
     for i, elem in enumerate(body_elems):
@@ -833,45 +774,34 @@ def analyze_section_headers(doc):
                 if p._element is elem:
                     para_to_body_idx[j] = i
                     break
-    
     try:
         start_body_pos = para_to_body_idx[start_idx]
     except:
         start_body_pos = 0
-    
     for idx, p in enumerate(doc.paragraphs):
         text = p.text.strip()
         if not text:
             continue
         if has_page_number(text):
             continue
-        
         if is_section_header(text):
             first_line = get_effective_first_line_indent(p)
             alignment = get_effective_alignment(p)
-            
             body_idx = para_to_body_idx.get(idx)
             starts_new_page = False
             if body_idx is not None:
                 starts_new_page = is_on_new_page(doc, body_idx, start_body_pos)
-                
-                # Дополнительная проверка: разрыв страницы в стиле
                 if not starts_new_page:
                     try:
-                        style = p.style
-                        if style and style.paragraph_format.page_break_before:
+                        if p.style and p.style.paragraph_format.page_break_before:
                             starts_new_page = True
                     except:
                         pass
-            
             has_empty_after = False
             if idx + 1 < len(doc.paragraphs):
-                next_para = doc.paragraphs[idx + 1]
-                if is_empty_paragraph(next_para):
+                if is_empty_paragraph(doc.paragraphs[idx + 1]):
                     has_empty_after = True
-            
             first_line_ok = abs(first_line) <= 0.05
-            
             results.append({
                 "index": idx,
                 "text": text[:80],
@@ -885,11 +815,10 @@ def analyze_section_headers(doc):
                 "alignment": alignment,
                 "alignment_ok": alignment == WD_ALIGN_PARAGRAPH.CENTER
             })
-    
     return results
 
 # ------------------------------------------------------------
-# Главная проверка документа
+# ГЛАВНАЯ ПРОВЕРКА ДОКУМЕНТА
 # ------------------------------------------------------------
 def check_word_document(file):
     doc = docx.Document(file)
@@ -908,7 +837,7 @@ def check_word_document(file):
     if not margins_ok:
         auto_issues.append("Поля страниц – установите левое 20 мм, правое 20 мм, верхнее 20 мм, нижнее 20 мм")
 
-    # --- ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ---
+    # --- ПОИСК НАЧАЛА (ВВЕДЕНИЕ) ---
     start_idx = None
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
@@ -956,15 +885,13 @@ def check_word_document(file):
                 lit_end = i
                 break
 
-    # --- ПРОВЕРКА ОСНОВНОГО ТЕКСТА ---
+    # --- ПОДГОТОВКА ---
     figure_counter = 0
     prev_para_empty = False
     prev_was_formula = False
-
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
     indent_issues = []
-
     figure_numbers_found = []
     table_numbers_found = []
 
@@ -984,6 +911,7 @@ def check_word_document(file):
     except:
         start_body_pos = 0
 
+    # --- ОСНОВНОЙ ЦИКЛ ПО АБЗАЦАМ ---
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
         text = p.text.strip()
@@ -1013,9 +941,8 @@ def check_word_document(file):
                 if in_toc and len(text) > 20:
                     is_subsection = True
 
-        # --- ПРОВЕРКА ДЛЯ ОСНОВНОГО ТЕКСТА (не заголовки) ---
+        # --- ОСНОВНОЙ ТЕКСТ (не заголовки) ---
         if not is_level1 and not is_subsection:
-            # Проверка списков
             is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
             if is_list:
                 if not marker_valid:
@@ -1058,7 +985,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
-            # Проверка рисунков
+            # Рисунки
             is_figure = norm_text.startswith("Рисунок") or norm_text.startswith("Рис.")
             is_table_caption = norm_text.startswith("Таблица")
 
@@ -1103,6 +1030,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
+            # Названия таблиц
             elif is_table_caption and not is_table_continuation(norm_text):
                 tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
                 if tbl_match:
@@ -1113,7 +1041,6 @@ def check_word_document(file):
 
                     if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]?\s*\S', norm_text) and not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*--', norm_text):
                         auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
-
                     if text.rstrip().endswith("."):
                         auto_issues.append(f"{key} – удалите точку в конце названия")
                     sizes = get_font_size_pt(p)
@@ -1132,34 +1059,30 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
-            # Основной текст
+            # Основной текст (абзацный отступ)
             key = norm_text[:50]
             first_line = get_effective_first_line_indent(p)
+            # для основного текста отступ должен быть 1 см, но если он задан в стиле – надо проверить и стиль
+            if first_line == 0.0:
+                try:
+                    style = p.style
+                    if style and style.paragraph_format.first_line_indent is not None:
+                        first_line = style.paragraph_format.first_line_indent.cm
+                except:
+                    pass
             if abs(first_line - 1.0) > 0.2:
                 indent_issues.append((key, first_line))
             if p.paragraph_format.space_before and p.paragraph_format.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
 
-        # === Проверка заголовков разделов ===
+        # === ЗАГОЛОВКИ РАЗДЕЛОВ ===
         if is_level1:
             key = text[:80]
-            
-            # Для ВВЕДЕНИЯ не проверяем новую страницу
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
                 starts_new_page = False
                 if body_idx is not None:
                     starts_new_page = is_on_new_page(doc, body_idx, start_body_pos)
-                    
-                    # Проверка page_break_before в стиле
-                    if not starts_new_page:
-                        try:
-                            if p.style and p.style.paragraph_format.page_break_before:
-                                starts_new_page = True
-                        except:
-                            pass
-                    
-                    # Проверка разрыва страницы в предыдущем параграфе
                     if not starts_new_page and idx > 0:
                         prev_para = doc.paragraphs[idx - 1]
                         if hasattr(prev_para, '_element'):
@@ -1167,52 +1090,65 @@ def check_word_document(file):
                             if pPr is not None:
                                 if pPr.find(qn('w:pageBreakBefore')) is not None:
                                     starts_new_page = True
-                
                 if not starts_new_page:
                     auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
-            
-            # Проверка отступа первой строки - только явный отступ в параграфе
+
             first_line = get_effective_first_line_indent(p)
             alignment = get_effective_alignment(p)
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 if round(abs(first_line), 2) > 0.05:
                     auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка (сейчас {first_line:.2f} см)")
-            
+
             if not is_paragraph_bold(p):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть полужирным")
-            
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
-            
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
-            
-            # Проверка пустой строки после заголовка
+
+            # Пустая строка после заголовка – улучшенная проверка
             if idx + 1 < len(doc.paragraphs):
                 next_para = doc.paragraphs[idx + 1]
-                if not is_empty_paragraph(next_para) and not is_section_header(next_para.text.strip()):
-                    auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+                next_text = next_para.text.strip()
+                has_empty_after = is_empty_paragraph(next_para)
+                if not has_empty_after and next_text and not is_section_header(next_text):
+                    body_idx_next = para_to_body_idx.get(idx + 1)
+                    if body_idx_next is not None:
+                        if not is_on_new_page(doc, body_idx_next, start_body_pos):
+                            auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+                    else:
+                        auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
 
-        # === Проверка подразделов ===
+        # === ПОДРАЗДЕЛЫ ===
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
+            # Отступ – учитываем и явный, и из стиля
             first_line = get_effective_first_line_indent(p)
+            if first_line == 0.0:
+                try:
+                    style = p.style
+                    if style and style.paragraph_format.first_line_indent is not None:
+                        first_line = style.paragraph_format.first_line_indent.cm
+                except:
+                    pass
             if abs(first_line - 1.0) > 0.2:
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
+
             if not is_paragraph_bold(p):
                 auto_issues.append(f"{key} – заголовок должен быть полужирным")
             if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.JUSTIFY:
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            
+
+            # пустая строка перед подразделом
             has_empty_before = False
             if idx > 0:
                 prev_para = doc.paragraphs[idx - 1]
                 if is_empty_paragraph(prev_para):
                     has_empty_before = True
-            
+
             is_technical_prev = False
             technical_keywords = [
                 r'(?:Продолжение|Окончание)\s+таблицы',
@@ -1225,7 +1161,7 @@ def check_word_document(file):
                     if re.search(keyword, prev_text, re.IGNORECASE):
                         is_technical_prev = True
                         break
-            
+
             is_table_before = False
             if idx > 0:
                 body_idx = para_to_body_idx.get(idx - 1)
@@ -1233,7 +1169,7 @@ def check_word_document(file):
                     prev_body_elem = body_elems[body_idx - 1] if body_idx - 1 >= 0 else None
                     if prev_body_elem is not None and prev_body_elem.tag == qn('w:tbl'):
                         is_table_before = True
-            
+
             prev_nonempty_was_section = False
             if idx > 0:
                 for j in range(idx - 1, -1, -1):
@@ -1241,17 +1177,18 @@ def check_word_document(file):
                     if prev_para_text:
                         prev_nonempty_was_section = is_section_header(prev_para_text)
                         break
-            
+
             if has_empty_before and not prev_nonempty_was_section and not is_technical_prev and not is_table_before:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
+        # сброс флагов
         if text:
             prev_para_empty = False
             prev_was_formula = False
         else:
             prev_para_empty = True
 
-    # --- ЗАВЕРШАЮЩИЕ ПРОВЕРКИ ---
+    # --- ЗАВЕРШАЮЩИЕ ПРОВЕРКИ (отступы в основном тексте) ---
     if indent_issues:
         if len(indent_issues) > 2:
             first_key, first_indent = indent_issues[0]
@@ -1310,7 +1247,7 @@ def check_word_document(file):
 
     table_issues = []
     missing_caption_count = 0
-    
+
     for tbl_pos, table in tables_in_range:
         caption_info = None
         for cap in table_captions_info:
@@ -1322,15 +1259,13 @@ def check_word_document(file):
                 if not other_tables_between:
                     caption_info = cap
                     break
-        
         if caption_info:
             key = caption_info['key']
             tbl_num = caption_info['number_str']
-            
             if caption_info.get('body_idx') is not None:
                 empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
                 table_issues.extend(empty_errors)
-            
+            # жирный шрифт внутри таблицы
             bold_in_table = False
             for row in table.rows:
                 for cell in row.cells:
@@ -1344,7 +1279,7 @@ def check_word_document(file):
                 if bold_in_table: break
             if bold_in_table:
                 table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
-            
+            # продолжение / окончание
             if len(table.rows) > 2:
                 markers_found = False
                 for i in range(tbl_pos + 1, min(tbl_pos + 10, len(doc.paragraphs))):
@@ -1355,6 +1290,7 @@ def check_word_document(file):
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
+            # нет названия – проверяем, не является ли предыдущий текст служебным
             is_continuation_before = False
             for i in range(tbl_pos - 1, max(start_body_pos, tbl_pos - 5), -1):
                 if i < len(doc.paragraphs):
@@ -1363,10 +1299,9 @@ def check_word_document(file):
                         if re.search(r'(?:Продолжение|Окончание)\s+таблицы', txt, re.IGNORECASE):
                             is_continuation_before = True
                         break
-            
             if not is_continuation_before:
                 missing_caption_count += 1
-    
+
     if missing_caption_count > 0:
         if missing_caption_count == 1:
             table_issues.append("Таблица – добавьте название перед таблицей")
@@ -1389,6 +1324,13 @@ def check_word_document(file):
             if abs(left_indent) > 0.1:
                 has_issue = True
             first_line = get_effective_first_line_indent(source)
+            if first_line == 0.0:
+                try:
+                    style = source.style
+                    if style and style.paragraph_format.first_line_indent is not None:
+                        first_line = style.paragraph_format.first_line_indent.cm
+                except:
+                    pass
             if abs(first_line - 1.0) > 0.1:
                 has_issue = True
             if has_issue:
@@ -1407,7 +1349,7 @@ def check_word_document(file):
     return group_issues(all_issues)
 
 # ------------------------------------------------------------
-# Функции для тестовых режимов
+# Запуск тестовых режимов
 # ------------------------------------------------------------
 def run_subsections_test(file):
     doc = docx.Document(file)
@@ -1421,15 +1363,12 @@ def run_section_headers_test(file):
 # ИНТЕРФЕЙС STREAMLIT
 # ------------------------------------------------------------
 st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
-
-# Создаем вкладки
 tab1, tab2, tab3 = st.tabs(["📊 Полная проверка документа", "🔍 Тест: анализ подразделов", "🔍 Тест: анализ заголовков разделов"])
 
 with tab1:
     st.title("📊 Автоматическая проверка документов Word")
     st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
     uploaded_file = st.file_uploader("Выберите файл", type=["docx"], key="full_check")
-
     if uploaded_file is not None:
         with st.spinner("Проверяем..."):
             results = check_word_document(uploaded_file)
@@ -1442,23 +1381,17 @@ with tab1:
 
 with tab2:
     st.title("🔍 Тест определения подразделов и пустых строк")
-    st.markdown("Загрузите документ .docx – программа покажет, для каких подразделов ошибочно требуется убрать пустую строку.")
-    
     test_file = st.file_uploader("Выберите файл .docx", type=["docx"], key="test_check")
-
     if test_file is not None:
         try:
             subsections = run_subsections_test(test_file)
-
             if not subsections:
                 st.info("В документе не найдено подразделов с номерами вида 1.1, 1.2 и т.д.")
             else:
                 st.subheader("Результаты анализа")
                 st.write(f"Всего подразделов: {len(subsections)}")
-
                 with_error = [s for s in subsections if s["error_should_show"]]
                 without_error = [s for s in subsections if not s["error_should_show"]]
-
                 if with_error:
                     st.error(f"❌ {len(with_error)} подраздел(ов), перед которыми пустая строка НЕ после раздела (нужно убрать):")
                     for s in with_error:
@@ -1466,13 +1399,11 @@ with tab2:
                         st.caption(f"  Пустая строка перед: {s['has_empty_before']}, предыдущий непустой был разделом: {s['prev_was_section']}, технический: {s.get('is_technical_prev', False)} (текст: «{s['prev_text']}»)")
                 else:
                     st.success("✅ Нет ошибочных требований убрать пустую строку перед подразделами.")
-
                 if without_error:
                     st.info(f"ℹ️ {len(without_error)} подраздел(ов) с корректным расположением:")
                     for s in without_error[:10]:
                         st.markdown(f"- **{s['text']}**")
                         st.caption(f"  Пустая строка перед: {s['has_empty_before']}, предыдущий раздел: {s['prev_was_section']}")
-
         except Exception as e:
             st.error(f"Ошибка: {e}")
     else:
@@ -1480,53 +1411,41 @@ with tab2:
 
 with tab3:
     st.title("🔍 Тест определения проблем заголовков разделов")
-    st.markdown("Загрузите документ .docx – программа покажет фактические отступы и начало новой страницы для заголовков разделов.")
-    
     test_file3 = st.file_uploader("Выберите файл .docx", type=["docx"], key="test_check3")
-
     if test_file3 is not None:
         try:
             headers = run_section_headers_test(test_file3)
-
             if not headers:
                 st.info("В документе не найдено заголовков разделов.")
             else:
                 st.subheader("Результаты анализа заголовков разделов")
                 st.write(f"Всего заголовков разделов: {len(headers)}")
-
                 for h in headers:
                     st.markdown(f"**{h['text']}**")
-                    
                     if h['first_line_indent_ok']:
                         st.success(f"✅ Отступ первой строки: {h['first_line_indent_cm']:.2f} см (должен быть 0 см)")
                     else:
                         st.error(f"❌ Отступ первой строки: {h['first_line_indent_cm']:.2f} см (должен быть 0 см)")
-                    
                     if h['text'].upper() == "ВВЕДЕНИЕ":
-                        st.info(f"ℹ️ Для ВВЕДЕНИЯ проверка новой страницы не требуется")
+                        st.info("ℹ️ Для ВВЕДЕНИЯ проверка новой страницы не требуется")
                     elif h['starts_new_page_ok']:
                         st.success(f"✅ Начинается с новой страницы: {h['starts_new_page']}")
                     else:
                         st.error(f"❌ Начинается с новой страницы: {h['starts_new_page']} (должно быть True)")
-                    
                     if h['has_empty_after_ok']:
                         st.success(f"✅ Пустая строка после заголовка: {h['has_empty_after']}")
                     else:
                         st.error(f"❌ Пустая строка после заголовка: {h['has_empty_after']} (должна быть)")
-                    
                     if h['is_bold']:
-                        st.success(f"✅ Полужирное начертание: Да")
+                        st.success("✅ Полужирное начертание: Да")
                     else:
-                        st.error(f"❌ Полужирное начертание: Нет")
-                    
+                        st.error("❌ Полужирное начертание: Нет")
                     align_text = str(h['alignment']) if h['alignment'] else "None"
                     if h['alignment'] == WD_ALIGN_PARAGRAPH.CENTER:
-                        st.success(f"✅ Выравнивание: по центру")
+                        st.success("✅ Выравнивание: по центру")
                     else:
                         st.error(f"❌ Выравнивание: {align_text} (должно быть по центру)")
-                    
                     st.write("---")
-                    
         except Exception as e:
             st.error(f"Ошибка: {e}")
     else:
