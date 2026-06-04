@@ -697,41 +697,53 @@ def has_content(elem):
 def analyze_subsections(doc):
     """Анализирует подразделы и определяет, нужно ли убирать пустую строку"""
     results = []
-    prev_para_empty = False
+    
+    # Сначала найдем все индексы пустых параграфов
+    empty_paragraph_indices = set()
+    for idx, para in enumerate(doc.paragraphs):
+        if not para.text.strip():
+            empty_paragraph_indices.add(idx)
+    
+    # Анализируем подразделы
     prev_nonempty_was_section = False
     prev_nonempty_text = ""
-
+    last_nonempty_idx = -1
+    
     for idx, para in enumerate(doc.paragraphs):
         text = para.text.strip()
         if not text:
-            prev_para_empty = True
             continue
-
+        
         is_section = is_section_header(text)
         is_sub = is_subsection_header(text)
-
+        
         if is_sub:
-            # Ошибка: пустая строка перед подразделом И предыдущий непустой НЕ был разделом
-            error_condition = prev_para_empty and not prev_nonempty_was_section
+            # Проверяем, есть ли пустая строка ПЕРЕД подразделом
+            # Пустая строка - это пустой параграф непосредственно перед текущим
+            has_empty_before = (idx - 1) in empty_paragraph_indices
+            
+            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом
+            error_condition = has_empty_before and not prev_nonempty_was_section
+            
             results.append({
                 "index": idx,
                 "text": text[:80],
-                "has_empty_before": prev_para_empty,
+                "has_empty_before": has_empty_before,
                 "prev_was_section": prev_nonempty_was_section,
                 "prev_text": prev_nonempty_text[:60] if prev_nonempty_text else "—",
                 "error_should_show": error_condition,
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
-
-        # Обновляем состояние для следующего абзаца (только для непустых)
+        
+        # Обновляем состояние для следующего подраздела
         if is_section:
             prev_nonempty_was_section = True
         else:
             prev_nonempty_was_section = False
-
+        
         prev_nonempty_text = text
-        prev_para_empty = False
-
+        last_nonempty_idx = idx
+    
     return results
 
 # ------------------------------------------------------------
