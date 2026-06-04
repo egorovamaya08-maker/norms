@@ -82,13 +82,22 @@ def is_section_header(text):
     if not cleaned:
         return False
     upper_cleaned = cleaned.upper()
-    # Служебные разделы
+    
+    # Правильные названия служебных разделов
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
-    # Начинается с "ГЛАВА" или "РАЗДЕЛ"
+    
+    # Ошибочные, но похожие варианты (например, "СПИСКОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ")
+    if re.search(r'СПИСКО?К?\s+ИСПОЛЬЗОВАНН?О?Й?\s+ЛИТЕРАТУРЫ?', upper_cleaned):
+        return True
+    if re.search(r'СПИСОК\s+ИСТОЧНИКОВ', upper_cleaned):
+        return True
+    
+    # "ГЛАВА 1" или "РАЗДЕЛ 1"
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
-    # Формат "1. НАЗВАНИЕ" (одна цифра, точка, пробел, заглавные)
+    
+    # "1. НАЗВАНИЕ" (одна цифра, точка, пробел, заглавные)
     if re.match(r'^\d+\.\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
         if '«' in cleaned or '»' in cleaned:
             return False
@@ -96,9 +105,11 @@ def is_section_header(text):
         if len(words) < 3 and len(cleaned) < 30:
             return False
         return True
-    # Формат "1.2. НАЗВАНИЕ" (две цифры с точкой) и название целиком заглавное
+    
+    # "1.2. НАЗВАНИЕ" (две цифры с точкой) и название целиком заглавное
     if re.match(r'^\d+\.\d+\.?\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
         return True
+    
     return False
 
 def is_subsection_header(text):
@@ -980,6 +991,12 @@ def check_word_document(file):
         # === ЗАГОЛОВКИ РАЗДЕЛОВ ===
         if is_level1:
             key = text[:80]
+            
+            # Проверка правильности названия списка литературы
+            if re.search(r'СПИСКО?К?\s+ИСПОЛЬЗОВАНН?О?Й?\s+ЛИТЕРАТУРЫ?', text.upper()):
+                auto_issues.append(f"«{text}» – исправьте название на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
+                
+            
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
                 starts_new_page = False
