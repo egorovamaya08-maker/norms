@@ -1428,6 +1428,7 @@ def check_word_document(file):
 
     # --- ТАБЛИЦЫ ---
        
+        # --- ТАБЛИЦЫ ---
     end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
@@ -1505,29 +1506,38 @@ def check_word_document(file):
         else:
             # Проверяем, не является ли предыдущий текст служебным (Продолжение/Окончание таблицы)
             is_continuation_before = False
+            
+            # Ищем предыдущий параграф перед таблицей (по индексу в body_elems)
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                if i >= len(doc.paragraphs):
+                if i >= len(body_elems):
                     continue
-                txt = doc.paragraphs[i].text.strip()
-                if txt:
-                    if re.search(r'(?:Продолжение|Окончание)\s+таблицы', txt, re.IGNORECASE):
-                        is_continuation_before = True
+                elem = body_elems[i]
+                if elem.tag == qn('w:p'):
+                    # Находим соответствующий параграф в doc.paragraphs
+                    for para_idx, para in enumerate(doc.paragraphs):
+                        if para._element == elem:
+                            txt = para.text.strip()
+                            if txt:
+                                if re.search(r'(?:Продолжение|Окончание)\s+таблицы', txt, re.IGNORECASE):
+                                    is_continuation_before = True
+                                break
                     break
             
-            # Если перед таблицей нет служебной надписи, выдаем ошибку
+            # Если перед таблицей есть служебная надпись, не выдаем ошибку
             if not is_continuation_before:
                 prev_text = ""
                 for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                    if i >= len(doc.paragraphs):
+                    if i >= len(body_elems):
                         continue
-                    elem = body_elems[i] if i < len(body_elems) else None
-                    if elem is None:
-                        continue
+                    elem = body_elems[i]
                     if elem.tag == qn('w:p'):
-                        txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-                        if txt:
-                            prev_text = txt[:50]
-                            break
+                        for para_idx, para in enumerate(doc.paragraphs):
+                            if para._element == elem:
+                                txt = para.text.strip()
+                                if txt:
+                                    prev_text = txt[:50]
+                                break
+                        break
                 table_issues.append(
                     f"Таблица – название должно быть перед таблицей (расположена после абзаца: «{prev_text}…»)" if prev_text
                     else "Таблица – название должно быть перед таблицей"
