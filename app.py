@@ -79,11 +79,7 @@ def has_page_number(text):
     return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
 
 def is_section_header(text):
-    """Заголовок раздела первого уровня:
-    - ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
-    - ГЛАВА 1, РАЗДЕЛ 2 и т.д.
-    - Текстовые заголовки, написанные ЗАГЛАВНЫМИ БУКВАМИ (длиной более 3 символов)
-    """
+    """Заголовок раздела первого уровня"""
     cleaned = normalize_text(text)
     if not cleaned:
         return False
@@ -98,7 +94,7 @@ def is_section_header(text):
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
     
-    # Текстовый заголовок ЗАГЛАВНЫМИ БУКВАМИ (не содержит строчных букв)
+    # Текстовый заголовок ЗАГЛАВНЫМИ БУКВАМИ
     only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
     if only_letters and len(only_letters) > 3:
         if only_letters == only_letters.upper():
