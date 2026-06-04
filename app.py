@@ -698,36 +698,11 @@ def analyze_subsections(doc):
     """Анализирует подразделы и определяет, нужно ли убирать пустую строку"""
     results = []
     
-    # Сначала найдем все индексы пустых параграфов
-    empty_paragraph_indices = set()
+    # Проходим по всем параграфам и запоминаем, какие из них пустые
+    is_empty = [False] * len(doc.paragraphs)
     for idx, para in enumerate(doc.paragraphs):
         if not para.text.strip():
-            empty_paragraph_indices.add(idx)
-    
-    # Определяем, с какой страницы начинается каждый параграф
-    # (на основе номера страницы в разметке Word)
-    page_starts = set()
-    try:
-        # Ищем разрывы страниц в документе
-        for idx, para in enumerate(doc.paragraphs):
-            # Проверяем, есть ли разрыв страницы перед параграфом
-            if idx > 0:
-                # Проверяем предыдущий параграф на наличие разрыва страницы
-                prev_para = doc.paragraphs[idx - 1]
-                # Проверяем XML на наличие w:br с type="page"
-                if hasattr(prev_para, '_element'):
-                    for br in prev_para._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br'):
-                        if br.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type') == 'page':
-                            page_starts.add(idx)
-                            break
-                    # Проверяем свойства параграфа на разрыв страницы перед ним
-                    pPr = prev_para._element.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pPr')
-                    if pPr is not None:
-                        page_break_before = pPr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pageBreakBefore')
-                        if page_break_before is not None:
-                            page_starts.add(idx)
-    except:
-        pass
+            is_empty[idx] = True
     
     # Анализируем подразделы
     prev_nonempty_was_section = False
@@ -742,23 +717,46 @@ def analyze_subsections(doc):
         is_sub = is_subsection_header(text)
         
         if is_sub:
-            # Проверяем, есть ли пустая строка ПЕРЕД подразделом
-            has_empty_before = (idx - 1) in empty_paragraph_indices
+            # Ищем предыдущий НЕПУСТОЙ параграф (пропуская пустые)
+            prev_nonempty_idx = idx - 1
+            while prev_nonempty_idx >= 0 and is_empty[prev_nonempty_idx]:
+                prev_nonempty_idx -= 1
             
-            # Проверяем, начинается ли подраздел с новой страницы
-            starts_new_page = idx in page_starts
+            # Проверяем, есть ли пустые параграфы между предыдущим непустым и текущим
+            has_empty_between = False
+            for j in range(prev_nonempty_idx + 1, idx):
+                if is_empty[j]:
+                    has_empty_between = True
+                    break
             
-            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом 
-            # И подраздел НЕ начинается с новой страницы
-            error_condition = has_empty_before and not prev_nonempty_was_section and not starts_new_page
+            # Ошибка: есть пустые строки между И предыдущий непустой НЕ был разделом
+            # НО: если между ними есть разрыв страницы, то не считаем ошибкой
+            error_condition = False
+            if has_empty_between and prev_nonempty_idx >= 0 and not prev_nonempty_was_section:
+                # Проверяем, нет ли разрыва страницы между параграфами
+                has_page_break = False
+                for j in range(prev_nonempty_idx + 1, idx):
+                    # Проверяем каждый параграф на наличие разрыва страницы
+                    para_to_check = doc.paragraphs[j]
+                    if hasattr(para_to_check, '_element'):
+                        # Проверяем разрыв страницы в самом параграфе
+                        for br in para_to_check._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br'):
+                            if br.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type') == 'page':
+                                has_page_break = True
+                                break
+                        if has_page_break:
+                            break
+                
+                # Только если нет разрыва страницы - выдаем ошибку
+                if not has_page_break:
+                    error_condition = True
             
             results.append({
                 "index": idx,
                 "text": text[:80],
-                "has_empty_before": has_empty_before,
+                "has_empty_before": has_empty_between,
                 "prev_was_section": prev_nonempty_was_section,
                 "prev_text": prev_nonempty_text[:60] if prev_nonempty_text else "—",
-                "starts_new_page": starts_new_page,
                 "error_should_show": error_condition,
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
@@ -769,7 +767,8 @@ def analyze_subsections(doc):
         else:
             prev_nonempty_was_section = False
         
-        prev_nonempty_text = text
+        if text:
+            prev_nonempty_text = text
     
     return results
 
