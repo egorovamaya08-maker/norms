@@ -880,11 +880,13 @@ def analyze_subsections(doc):
     """Анализирует подразделы и определяет, нужно ли убирать пустую строку"""
     results = []
     
+    # Сначала найдем все индексы пустых параграфов
     empty_paragraph_indices = set()
     for idx, para in enumerate(doc.paragraphs):
         if not para.text.strip():
             empty_paragraph_indices.add(idx)
     
+    # Анализируем подразделы
     prev_nonempty_was_section = False
     prev_nonempty_text = ""
     
@@ -897,14 +899,24 @@ def analyze_subsections(doc):
         is_sub = is_subsection_header(text)
         
         if is_sub:
+            # Проверяем, есть ли пустая строка ПЕРЕД подразделом
             has_empty_before = (idx - 1) in empty_paragraph_indices
             
+            # Проверяем, не является ли предыдущий текст техническим
             is_technical_prev = False
+            technical_keywords = [
+                r'(?:Продолжение|Окончание)\s+таблицы',
+                r'Таблица\s+\d+\s*[–—]',
+                r'Рисунок\s+\d+\s*[–—]'
+            ]
             if idx > 0:
                 prev_text = doc.paragraphs[idx - 1].text.strip()
-                if re.search(r'(?:Продолжение|Окончание)\s+таблицы', prev_text, re.IGNORECASE):
-                    is_technical_prev = True
+                for keyword in technical_keywords:
+                    if re.search(keyword, prev_text, re.IGNORECASE):
+                        is_technical_prev = True
+                        break
             
+            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом И не технический
             error_condition = has_empty_before and not prev_nonempty_was_section and not is_technical_prev
             
             results.append({
@@ -918,6 +930,7 @@ def analyze_subsections(doc):
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
         
+        # Обновляем состояние для следующего подраздела
         if is_section:
             prev_nonempty_was_section = True
         else:
@@ -1283,15 +1296,6 @@ def check_word_document(file):
                 if body_idx is not None:
                     starts_new_page = is_on_new_page(doc, body_idx, start_body_pos)
                     
-                    # Проверка page_break_before в стиле
-                    if not starts_new_page:
-                        try:
-                            if p.style and p.style.paragraph_format.page_break_before:
-                                starts_new_page = True
-                        except:
-                            pass
-                    
-                    # Проверка разрыва страницы в предыдущем параграфе
                     if not starts_new_page and idx > 0:
                         prev_para = doc.paragraphs[idx - 1]
                         if hasattr(prev_para, '_element'):
@@ -1304,27 +1308,21 @@ def check_word_document(file):
                     auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
             
             # Проверка отступа первой строки - только явный отступ в параграфе
-            # Используем функцию, которая игнорирует стиль
             first_line = get_effective_first_line_indent(p)
-            # Если выравнивание по центру, отступ не имеет значения
             alignment = get_effective_alignment(p)
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 if round(abs(first_line), 2) > 0.05:
                     auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка (сейчас {first_line:.2f} см)")
             
-            # Проверка полужирного начертания
             if not is_paragraph_bold(p):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть полужирным")
             
-            # Проверка выравнивания по центру
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
             
-            # Проверка точки в конце
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
             
-            # Проверка пустой строки после заголовка
             if idx + 1 < len(doc.paragraphs):
                 next_para = doc.paragraphs[idx + 1]
                 if not is_empty_paragraph(next_para):
@@ -1353,10 +1351,26 @@ def check_word_document(file):
             
             # Проверяем, не является ли предыдущий текст техническим
             is_technical_prev = False
+            technical_keywords = [
+                r'(?:Продолжение|Окончание)\s+таблицы',
+                r'Таблица\s+\d+\s*[–—]',
+                r'Рисунок\s+\d+\s*[–—]'
+            ]
             if idx > 0:
                 prev_text = doc.paragraphs[idx - 1].text.strip()
-                if re.search(r'(?:Продолжение|Окончание)\s+таблицы', prev_text, re.IGNORECASE):
-                    is_technical_prev = True
+                for keyword in technical_keywords:
+                    if re.search(keyword, prev_text, re.IGNORECASE):
+                        is_technical_prev = True
+                        break
+            
+            # Проверяем, находится ли перед подразделом таблица
+            is_table_before = False
+            if idx > 0:
+                body_idx = para_to_body_idx.get(idx - 1)
+                if body_idx is not None and body_idx > 0:
+                    prev_body_elem = body_elems[body_idx - 1] if body_idx - 1 >= 0 else None
+                    if prev_body_elem is not None and prev_body_elem.tag == qn('w:tbl'):
+                        is_table_before = True
             
             # Ищем ПРЕДЫДУЩИЙ НЕПУСТОЙ параграф и проверяем, был ли он разделом
             prev_nonempty_was_section = False
@@ -1367,11 +1381,11 @@ def check_word_document(file):
                         prev_nonempty_was_section = is_section_header(prev_para_text)
                         break
             
-            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом И не технический
-            if has_empty_before and not prev_nonempty_was_section and not is_technical_prev:
+            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом 
+            # И не технический И не перед таблицей
+            if has_empty_before and not prev_nonempty_was_section and not is_technical_prev and not is_table_before:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
-        # Сброс флагов
         if text:
             prev_para_empty = False
             prev_was_formula = False
