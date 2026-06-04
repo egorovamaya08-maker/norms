@@ -1216,11 +1216,12 @@ def check_word_document(file):
             if not is_continuation_before:
                 missing_caption_count += 1
 
+    # Переносим сообщения об отсутствии названий таблиц в ручную проверку
     if missing_caption_count > 0:
         if missing_caption_count == 1:
-            table_issues.append("Таблица – добавьте название перед таблицей")
+            manual_checks.append("Проверить, что названия таблиц находятся перед таблицами, а не после")
         else:
-            table_issues.append(f"Таблицы ({missing_caption_count} шт.) – добавьте названия перед таблицами")
+            manual_checks.append(f"Проверить, что названия таблиц ({missing_caption_count} шт.) находятся перед таблицами, а не после")
 
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
