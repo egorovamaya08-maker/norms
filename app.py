@@ -100,7 +100,9 @@ def is_subsection_header(text):
     cleaned = text.strip()
     if not cleaned:
         return False
-    if re.match(r'^\d+\.\d+(\.\d+)?\s+[А-Яа-яA-Za-z]', cleaned):
+    # Стандартный формат: цифра, точка, цифра (и ещё .цифра), пробел, затем любые буквы/цифры/пробелы/знаки
+    # (название может содержать и заглавные, и строчные)
+    if re.match(r'^\d+\.\d+(\.\d+)?\s+\S', cleaned):
         return True
     return False
 
