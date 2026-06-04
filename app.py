@@ -85,17 +85,33 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    """Заголовок раздела первого уровня - ТОЛЬКО ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСТОЧНИКОВ и ГЛАВА/РАЗДЕЛ с номером"""
+    """Заголовок раздела первого уровня:
+    - ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ
+    - ГЛАВА 1, РАЗДЕЛ 2 и т.д.
+    - Текстовые заголовки, написанные ЗАГЛАВНЫМИ БУКВАМИ (длиной более 3 символов)
+    """
     cleaned = normalize_text(text)
     if not cleaned:
         return False
-    # Прямые названия (только они, без цифр)
+    
     upper_cleaned = cleaned.upper()
+    
+    # Служебные разделы
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
-    # Начинается с "ГЛАВА" или "РАЗДЕЛ" (с номером)
+    
+    # Начинается с "ГЛАВА" или "РАЗДЕЛ"
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
+    
+    # Текстовый заголовок ЗАГЛАВНЫМИ БУКВАМИ (не содержит строчных букв)
+    # Убираем цифры, пробелы, знаки препинания
+    only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
+    if only_letters and len(only_letters) > 3:
+        # Проверяем, что все буквы заглавные
+        if only_letters == only_letters.upper():
+            return True
+    
     return False
 
 def is_subsection_header(text):
