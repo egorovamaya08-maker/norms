@@ -1427,6 +1427,7 @@ def check_word_document(file):
                 table_seq_issues.append("Таблицы – неверная нумерация")
 
     # --- ТАБЛИЦЫ ---
+       
     end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
@@ -1502,21 +1503,40 @@ def check_word_document(file):
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
-            prev_text = ""
+            # Проверяем, не является ли предыдущий текст служебным (Продолжение/Окончание таблицы)
+            is_continuation_before = False
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                elem = body_elems[i]
-                if elem.tag == qn('w:p'):
-                    txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-                    if txt:
-                        prev_text = txt[:50]
-                        break
-            table_issues.append(
-                f"Таблица – название должно быть перед таблицей (расположена после абзаца: «{prev_text}…»)" if prev_text
-                else "Таблица – название должно быть перед таблицей"
-            )
+                if i >= len(doc.paragraphs):
+                    continue
+                txt = doc.paragraphs[i].text.strip()
+                if txt:
+                    if re.search(r'(?:Продолжение|Окончание)\s+таблицы', txt, re.IGNORECASE):
+                        is_continuation_before = True
+                    break
+            
+            # Если перед таблицей нет служебной надписи, выдаем ошибку
+            if not is_continuation_before:
+                prev_text = ""
+                for i in range(tbl_pos - 1, start_body_pos - 1, -1):
+                    if i >= len(doc.paragraphs):
+                        continue
+                    elem = body_elems[i] if i < len(body_elems) else None
+                    if elem is None:
+                        continue
+                    if elem.tag == qn('w:p'):
+                        txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
+                        if txt:
+                            prev_text = txt[:50]
+                            break
+                table_issues.append(
+                    f"Таблица – название должно быть перед таблицей (расположена после абзаца: «{prev_text}…»)" if prev_text
+                    else "Таблица – название должно быть перед таблицей"
+                )
 
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
+    
+   
 
     # --- СПИСОК ИСТОЧНИКОВ ---
     if lit_start is not None:
