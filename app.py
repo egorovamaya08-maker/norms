@@ -83,18 +83,13 @@ def is_section_header(text):
     if not cleaned:
         return False
     upper_cleaned = cleaned.upper()
-    # Служебные разделы
     if upper_cleaned in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
         return True
-    # Начинается с "ГЛАВА" или "РАЗДЕЛ"
     if re.match(r'^(ГЛАВА|РАЗДЕЛ)\s+\d+', upper_cleaned):
         return True
-    # "1. НАЗВАНИЕ" – номер, точка, пробел, заглавные буквы
     if re.match(r'^\d+\.\s+[А-ЯЁ]', cleaned) and is_all_caps(cleaned):
-        # Не должно быть кавычек-ёлочек (признак названия компании)
         if '«' in cleaned or '»' in cleaned:
             return False
-        # Проверяем, что это не просто "1. НазваниеКомпании" (слитно)
         words = cleaned.split()
         if len(words) < 3 and len(cleaned) < 30:
             return False
@@ -102,7 +97,6 @@ def is_section_header(text):
     return False
 
 def is_subsection_header(text):
-    """Подраздел вида 1.1 Текст, 1.1.1 Текст"""
     cleaned = text.strip()
     if not cleaned:
         return False
@@ -214,7 +208,6 @@ def get_list_marker_info(paragraph, doc):
     return False, "", True
 
 def get_effective_first_line_indent(paragraph):
-    """Проверяет только явный отступ в параграфе, игнорируя стиль."""
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -292,8 +285,7 @@ def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty
     first_line = get_effective_first_line_indent(paragraph)
     if abs(first_line - 1.0) > 0.2:
         errors.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
-    if prev_para_empty and prev_was_formula:
-        errors.append(f"{key} – уберите пустую строку перед пояснением (должно идти сразу после формулы)")
+    # Проверка пустой строки ПЕРЕД пояснением УДАЛЕНА по требованию пользователя
     explanation_text = re.sub(r'^[Гг]де\s*:?\s*', '', text).strip()
     lines = [l.strip() for l in explanation_text.split('\t') if l.strip()]
     if len(lines) > 1:
@@ -616,7 +608,6 @@ def has_content(elem):
     return False
 
 def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
-    """Проверяет, начинается ли элемент с новой страницы (с косвенными признаками)"""
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
@@ -645,7 +636,6 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
-    # Косвенные признаки
     current_idx = None
     for i, p in enumerate(doc.paragraphs):
         if p._element == body_elems[body_idx]:
@@ -968,7 +958,6 @@ def check_word_document(file):
             # Основной текст (абзацный отступ)
             key = norm_text[:50]
             first_line = get_effective_first_line_indent(p)
-            # если в параграфе нет явного отступа, проверяем стиль (для подразделов)
             if first_line == 0.0:
                 try:
                     style = p.style
@@ -999,7 +988,6 @@ def check_word_document(file):
                 if not starts_new_page:
                     auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
 
-            # Проверка отступа – только явный (игнорируем стиль)
             first_line = get_effective_first_line_indent(p)
             alignment = get_effective_alignment(p)
             if alignment != WD_ALIGN_PARAGRAPH.CENTER:
@@ -1013,7 +1001,6 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
 
-            # Пустая строка после заголовка
             if idx + 1 < len(doc.paragraphs):
                 next_para = doc.paragraphs[idx + 1]
                 next_text = next_para.text.strip()
@@ -1030,7 +1017,6 @@ def check_word_document(file):
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
-            # Отступ – учитываем и явный, и из стиля
             first_line = get_effective_first_line_indent(p)
             if first_line == 0.0:
                 try:
@@ -1048,7 +1034,6 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
 
-            # Пустая строка перед подразделом
             has_empty_before = False
             if idx > 0:
                 prev_para = doc.paragraphs[idx - 1]
@@ -1087,7 +1072,6 @@ def check_word_document(file):
             if has_empty_before and not prev_nonempty_was_section and not is_technical_prev and not is_table_before:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
-        # Сброс флагов
         if text:
             prev_para_empty = False
             prev_was_formula = False
