@@ -11,31 +11,24 @@ import unicodedata
 NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 
 # ------------------------------------------------------------
-# Нормализация текста: удаление невидимок, замена пробелов
+# Нормализация текста
 # ------------------------------------------------------------
 def normalize_text(text):
-    """Удаляет невидимые символы (категория Cf), заменяет все пробельные на обычный пробел."""
     if not text:
         return text
     result = []
-    prev_digit = False
     for ch in text:
         cat = unicodedata.category(ch)
-        if cat == 'Cf':          # невидимка
-            prev_digit = ch.isdigit() if not result else result[-1].isdigit()
+        if cat == 'Cf':
             continue
         if ch.isspace():
             result.append(' ')
         else:
-            # Между цифрой и буквой нужен пробел
             if result and result[-1].isdigit() and ch.isalpha():
                 result.append(' ')
             result.append(ch)
     return re.sub(r'\s+', ' ', ''.join(result)).strip()
 
-# ------------------------------------------------------------
-# Вспомогательные функции (без изменений)
-# ------------------------------------------------------------
 def get_effective_alignment(paragraph):
     if paragraph.alignment is not None:
         return paragraph.alignment
@@ -92,7 +85,6 @@ def is_all_caps(text):
     return clean_text == clean_text.upper()
 
 def is_section_header(text):
-    """Проверяет, является ли текст заголовком раздела первого уровня."""
     cleaned = normalize_text(text)
     if not cleaned:
         return False
@@ -100,7 +92,6 @@ def is_section_header(text):
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
         return True
-    # Основной критерий: номер с точкой + заглавные буквы
     if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned):
         clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
         if not clean_letters:
@@ -148,27 +139,21 @@ def get_list_marker_info(paragraph, doc):
     text = paragraph.text.strip()
     if not text:
         return False, "", True
-
     first_char = text[0] if text else ""
-
     if is_dash_char(first_char):
         return True, "тире", True
-
     if re.match(r'^\d+\)\s', text):
         return True, "нумерованный", True
     if re.match(r'^\d+\.\s', text):
         return True, "нумерованный", True
-
     if re.match(r'^[а-яё]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
     if re.match(r'^[a-z]\)\s', text, re.IGNORECASE):
         return True, "буквенный", True
-
     if is_bullet_char(first_char):
         return True, "круглый маркер (•)", False
     if is_arrow_char(first_char):
         return True, f"недопустимый маркер (стрелка {first_char})", False
-
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -214,13 +199,11 @@ def get_list_marker_info(paragraph, doc):
                                                 return True, f"формат '{fmt}'", True
     except:
         pass
-
     left_indent = get_effective_left_indent(paragraph)
     first_line = get_effective_first_line_indent(paragraph)
     if left_indent > 0.5 and first_line < 0:
         if not re.match(r'[А-Яа-яёЁA-Za-z0-9]', first_char) and first_char != ' ':
             return True, f"недопустимый маркер ({first_char})", False
-
     return False, "", True
 
 def get_effective_first_line_indent(paragraph):
@@ -479,7 +462,6 @@ def group_issues(issues_list):
     auto_issues = []
     manual_issues = []
     manual_section = False
-
     for issue in issues_list:
         if issue.startswith("📋 Для проверки человеком"):
             manual_section = True
@@ -488,10 +470,8 @@ def group_issues(issues_list):
             manual_issues.append(issue)
         else:
             auto_issues.append(issue)
-
     grouped = defaultdict(list)
     standalone = []
-
     for issue in auto_issues:
         match = re.match(
             r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|'
@@ -522,7 +502,6 @@ def group_issues(issues_list):
                 standalone.append(issue)
         else:
             standalone.append(issue)
-
     figure_keys = [k for k in grouped if re.match(r'^Рисунок\s+\d', k)]
     if len(figure_keys) > 3:
         all_fig_messages = []
@@ -544,7 +523,6 @@ def group_issues(issues_list):
         for k in figure_keys:
             del grouped[k]
         standalone.insert(0, combined_fig)
-
     caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
     caption_msgs_keys = []
     for key in list(grouped.keys()):
@@ -560,7 +538,6 @@ def group_issues(issues_list):
                 grouped[key] = new_msgs
             else:
                 del grouped[key]
-
     if len(caption_msgs_keys) >= 2:
         for k in caption_msgs_keys:
             if k in grouped and not grouped[k]:
@@ -569,7 +546,6 @@ def group_issues(issues_list):
     else:
         for k in caption_msgs_keys:
             grouped[k].append("Исправьте название на «Таблица " + k.split()[-1] + " – Название»")
-
     before_msgs = [issue for issue in standalone if issue.startswith("Таблица – название должно быть перед таблицей")]
     if len(before_msgs) >= 2:
         for msg in before_msgs:
@@ -580,7 +556,6 @@ def group_issues(issues_list):
         for k in before_keys:
             del grouped[k]
         standalone.insert(0, "Таблицы – название должно быть перед таблицей")
-
     table_common_msgs = [issue for issue in standalone if issue.startswith("Таблицы –")]
     if len(table_common_msgs) > 1:
         parts = [issue[len("Таблицы –"):] for issue in table_common_msgs]
@@ -588,7 +563,6 @@ def group_issues(issues_list):
         for issue in table_common_msgs:
             standalone.remove(issue)
         standalone.append(combined)
-
     result = []
     for issue in standalone:
         result.append(issue)
@@ -609,20 +583,16 @@ def group_issues(issues_list):
                 result.append(f"{key} – {combined}")
             else:
                 result.append(f"«{key}» – {combined}")
-
     result.sort(key=lambda x: (get_category_order(x), x))
-
     cont_pattern = re.compile(r'^Таблица\s+(\d+(?:\.\d+)?)\s+–\s+проверьте\s+наличие\s+«Продолжение таблицы \1»\s+/\s+«Окончание таблицы \1» при переносе на следующую страницу$')
     cont_msgs = [m for m in manual_issues if cont_pattern.match(m)]
     if len(cont_msgs) >= 2:
         for m in cont_msgs:
             manual_issues.remove(m)
         manual_issues.append("Таблицы – проверьте наличие «Продолжение таблицы» / «Окончание таблицы» при переносе на следующую страницу")
-
     if manual_issues:
         result.append("\n📋 Для проверки человеком:")
         result.extend(manual_issues)
-
     return result
 
 def get_font_size_pt(paragraph):
@@ -657,11 +627,9 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
-
     blank_count = 0
     for i in range(body_idx - 1, start_body_pos - 1, -1):
         elem = body_elems[i]
-
         if elem.tag == qn('w:sectPr'):
             if i == len(body_elems) - 1:
                 continue
@@ -670,12 +638,10 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             if val == 'continuous':
                 continue
             return True
-
         if elem.tag == qn('w:p'):
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
-
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
                 sectPr = pPr.find(qn('w:sectPr'))
@@ -684,16 +650,13 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
-
             if has_content(elem):
                 return blank_count >= min_empty_paragraphs
             else:
                 blank_count += 1
                 continue
-
         if elem.tag == qn('w:tbl'):
             return blank_count >= min_empty_paragraphs
-
     return True
 
 def has_content(elem):
@@ -705,7 +668,7 @@ def has_content(elem):
     return False
 
 # ------------------------------------------------------------
-# Главная проверка документа
+# Главная проверка документа (ИСПРАВЛЕНА)
 # ------------------------------------------------------------
 def check_word_document(file):
     doc = docx.Document(file)
@@ -777,7 +740,10 @@ def check_word_document(file):
     prev_para_empty = False
     prev_was_formula = False
     prev_was_section_header = False
-    prev_was_subsection = False          # новое
+    prev_was_subsection = False
+    # НОВАЯ ПЕРЕМЕННАЯ: последний непустой абзац был заголовком раздела
+    prev_nonempty_was_section_header = False
+
     end_idx = lit_start if lit_start is not None else len(doc.paragraphs)
     list_errors = []
     indent_issues = []
@@ -830,26 +796,29 @@ def check_word_document(file):
                 if in_toc and len(text) > 20:
                     is_subsection = True
 
-        # ==================== ИСПРАВЛЕНИЕ 1 ====================
-        # Правильное обновление флагов
+        # Обновляем флаги для текущего абзаца
         if is_level1 or is_subsection:
             if is_level1:
                 prev_was_section_header = True
                 prev_was_subsection = False
+                # Запоминаем, что последний непустой абзац — заголовок раздела
+                prev_nonempty_was_section_header = True
             else:
                 prev_was_subsection = True
                 prev_was_section_header = False
+                # Подраздел — не заголовок раздела, сбрасываем флаг
+                prev_nonempty_was_section_header = False
         else:
             prev_was_section_header = False
             prev_was_subsection = False
+            # Обычный текст — не заголовок раздела
+            prev_nonempty_was_section_header = False
 
-        # ==================== ИСПРАВЛЕНИЕ 2 ====================
-        # Проверка отступа только для основного текста (не заголовков)
+        # --- ПРОВЕРКА ДЛЯ ОСНОВНОГО ТЕКСТА (не заголовки) ---
         if not is_level1 and not is_subsection:
-            # Проверка списков, продолжения таблиц, формул и т.д.
+            # Проверка списков
             is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
             if is_list:
-                # ... обработка списков ...
                 if not marker_valid:
                     if list_errors and idx == list_errors[-1][0] + 1:
                         list_errors.append((idx, text, marker_type))
@@ -895,7 +864,6 @@ def check_word_document(file):
             is_table_caption = norm_text.startswith("Таблица")
 
             if is_figure:
-                # ... (код проверки рисунков без изменений)
                 num_match = re.search(r'(?:Рисунок|Рис\.)\s*:?\s*(\d+(?:\.\d+)?)', norm_text)
                 if num_match:
                     fig_num = num_match.group(1)
@@ -909,7 +877,8 @@ def check_word_document(file):
                     auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
                 if re.match(r'Рисунок\s*:', norm_text):
                     auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
-                if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
+                # Разрешаем --, –, — в качестве разделителя
+                if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*--', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
                     if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
                         auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
                     else:
@@ -918,7 +887,7 @@ def check_word_document(file):
                     auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
                 if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
                     auto_issues.append(f"{fig_number} – удалите точку в конце")
-                m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', norm_text)
+                m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]?\s*(.+)$', norm_text)
                 if m:
                     title = m.group(1).strip()
                     if title and title[0].islower():
@@ -944,7 +913,8 @@ def check_word_document(file):
                     table_numbers_found.append(tbl_num_float)
                     key = f"Таблица {tbl_num}"
 
-                    if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
+                    # Разрешаем --, –, — в качестве разделителя
+                    if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]?\s*\S', norm_text) and not re.search(r'Таблица\s+\d+(?:\.\d+)?\s*--', norm_text):
                         auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
 
                     if text.rstrip().endswith("."):
@@ -965,7 +935,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
-            # Основной текст (не заголовок, не список, не формула, не подпись)
+            # Основной текст
             key = norm_text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
@@ -1006,17 +976,16 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            # ==================== ИСПРАВЛЕНИЕ 3 ====================
-            if prev_para_empty and not prev_was_section_header:
+            # ИСПРАВЛЕНИЕ: используем prev_nonempty_was_section_header вместо prev_was_section_header
+            if prev_para_empty and not prev_nonempty_was_section_header:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
-        # Сброс флагов для следующей итерации
+        # Сброс флагов
         if text:
             prev_para_empty = False
             prev_was_formula = False
         else:
             prev_para_empty = True
-        # не сбрасываем prev_was_section_header / prev_was_subsection — они обновлены выше
 
     # --- ЗАВЕРШАЮЩИЕ ПРОВЕРКИ ---
     if indent_issues:
@@ -1076,7 +1045,6 @@ def check_word_document(file):
         tables_in_range.append((tbl_pos, table))
 
     table_issues = []
-
     for tbl_pos, table in tables_in_range:
         caption_info = None
         for cap in table_captions_info:
