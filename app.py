@@ -1202,6 +1202,15 @@ def check_word_document(file):
                 if body_idx is not None:
                     starts_new_page = is_on_new_page(doc, body_idx, start_body_pos)
                     
+                    # Проверка page_break_before в стиле
+                    if not starts_new_page:
+                        try:
+                            if p.style and p.style.paragraph_format.page_break_before:
+                                starts_new_page = True
+                        except:
+                            pass
+                    
+                    # Проверка разрыва страницы в предыдущем параграфе
                     if not starts_new_page and idx > 0:
                         prev_para = doc.paragraphs[idx - 1]
                         if hasattr(prev_para, '_element'):
@@ -1213,17 +1222,21 @@ def check_word_document(file):
                 if not starts_new_page:
                     auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
             
-            # Проверка отступа первой строки
+            # Проверка отступа первой строки - только явный отступ в параграфе
+            # Используем функцию, которая игнорирует стиль
             first_line = get_effective_first_line_indent(p)
-            if round(abs(first_line), 2) > 0.01:
-                auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка (сейчас {first_line:.2f} см)")
+            # Если выравнивание по центру, отступ не имеет значения
+            alignment = get_effective_alignment(p)
+            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
+                if round(abs(first_line), 2) > 0.05:
+                    auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка (сейчас {first_line:.2f} см)")
             
             # Проверка полужирного начертания
             if not is_paragraph_bold(p):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть полужирным")
             
             # Проверка выравнивания по центру
-            if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.CENTER:
+            if alignment != WD_ALIGN_PARAGRAPH.CENTER:
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
             
             # Проверка точки в конце
@@ -1250,18 +1263,21 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
             
+            # Проверяем наличие реальной пустой строки перед подразделом
             has_empty_before = False
             if idx > 0:
                 prev_para = doc.paragraphs[idx - 1]
                 if is_empty_paragraph(prev_para):
                     has_empty_before = True
             
+            # Проверяем, не является ли предыдущий текст техническим
             is_technical_prev = False
             if idx > 0:
                 prev_text = doc.paragraphs[idx - 1].text.strip()
                 if re.search(r'(?:Продолжение|Окончание)\s+таблицы', prev_text, re.IGNORECASE):
                     is_technical_prev = True
             
+            # Ищем ПРЕДЫДУЩИЙ НЕПУСТОЙ параграф и проверяем, был ли он разделом
             prev_nonempty_was_section = False
             if idx > 0:
                 for j in range(idx - 1, -1, -1):
@@ -1270,9 +1286,11 @@ def check_word_document(file):
                         prev_nonempty_was_section = is_section_header(prev_para_text)
                         break
             
+            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом И не технический
             if has_empty_before and not prev_nonempty_was_section and not is_technical_prev:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
+        # Сброс флагов
         if text:
             prev_para_empty = False
             prev_was_formula = False
@@ -1434,7 +1452,6 @@ def check_word_document(file):
         all_issues.append("📋 Для проверки человеком:")
         all_issues.extend(manual_checks)
     return group_issues(all_issues)
-
 # ------------------------------------------------------------
 # Функции для тестовых режимов
 # ------------------------------------------------------------
