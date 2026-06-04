@@ -704,10 +704,34 @@ def analyze_subsections(doc):
         if not para.text.strip():
             empty_paragraph_indices.add(idx)
     
+    # Определяем, с какой страницы начинается каждый параграф
+    # (на основе номера страницы в разметке Word)
+    page_starts = set()
+    try:
+        # Ищем разрывы страниц в документе
+        for idx, para in enumerate(doc.paragraphs):
+            # Проверяем, есть ли разрыв страницы перед параграфом
+            if idx > 0:
+                # Проверяем предыдущий параграф на наличие разрыва страницы
+                prev_para = doc.paragraphs[idx - 1]
+                # Проверяем XML на наличие w:br с type="page"
+                if hasattr(prev_para, '_element'):
+                    for br in prev_para._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br'):
+                        if br.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type') == 'page':
+                            page_starts.add(idx)
+                            break
+                    # Проверяем свойства параграфа на разрыв страницы перед ним
+                    pPr = prev_para._element.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pPr')
+                    if pPr is not None:
+                        page_break_before = pPr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pageBreakBefore')
+                        if page_break_before is not None:
+                            page_starts.add(idx)
+    except:
+        pass
+    
     # Анализируем подразделы
     prev_nonempty_was_section = False
     prev_nonempty_text = ""
-    last_nonempty_idx = -1
     
     for idx, para in enumerate(doc.paragraphs):
         text = para.text.strip()
@@ -719,11 +743,14 @@ def analyze_subsections(doc):
         
         if is_sub:
             # Проверяем, есть ли пустая строка ПЕРЕД подразделом
-            # Пустая строка - это пустой параграф непосредственно перед текущим
             has_empty_before = (idx - 1) in empty_paragraph_indices
             
-            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом
-            error_condition = has_empty_before and not prev_nonempty_was_section
+            # Проверяем, начинается ли подраздел с новой страницы
+            starts_new_page = idx in page_starts
+            
+            # Ошибка: есть пустая строка И предыдущий непустой НЕ был разделом 
+            # И подраздел НЕ начинается с новой страницы
+            error_condition = has_empty_before and not prev_nonempty_was_section and not starts_new_page
             
             results.append({
                 "index": idx,
@@ -731,6 +758,7 @@ def analyze_subsections(doc):
                 "has_empty_before": has_empty_before,
                 "prev_was_section": prev_nonempty_was_section,
                 "prev_text": prev_nonempty_text[:60] if prev_nonempty_text else "—",
+                "starts_new_page": starts_new_page,
                 "error_should_show": error_condition,
                 "error_msg": f"Подраздел «{text[:50]}» – уберите пустую строку перед подразделом" if error_condition else None
             })
@@ -742,7 +770,6 @@ def analyze_subsections(doc):
             prev_nonempty_was_section = False
         
         prev_nonempty_text = text
-        last_nonempty_idx = idx
     
     return results
 
