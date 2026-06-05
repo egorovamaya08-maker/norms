@@ -974,8 +974,8 @@ def check_word_document(file):
                     table_numbers_found.append(tbl_num_float)
                     key = f"Таблица {tbl_num}"
 
-                    if not re.match(r'Таблица\s+\d+(?:\.\d+)?\s+[–—]\s+\S', norm_text):
-                        auto_issues.append(f"{key} – Исправьте название на «Таблица {tbl_num} – Название»")
+                    if not re.match(r'Таблица\s+\d+\s+[-–—]{1,2}\s+', text):
+                        issues.append(f"Таблица {table_counter} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
 
                     if text.rstrip().endswith("."):
                         auto_issues.append(f"{key} – удалите точку в конце названия")
