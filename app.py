@@ -94,7 +94,7 @@ def is_section_header(text):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
-    if cleaned.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"}:
+    if cleaned.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ"}:
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
         return True
@@ -796,9 +796,13 @@ def check_word_document(file):
     lit_start = None
     for i in range(start_idx, len(doc.paragraphs)):
         txt = doc.paragraphs[i].text.strip()
-        if txt.upper() == "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ" and not has_page_number(txt):
+        txt_upper = txt.upper()
+        if txt_upper in ("СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ") and not has_page_number(txt):
             lit_start = i
-            break
+            if txt_upper == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
+                auto_issues.append("Список источников – замените заголовок на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
+            break   
+    
     lit_end = len(doc.paragraphs)
     if lit_start is not None:
         appendix_keywords = ["ПРИЛОЖЕНИЕ", "ПРИЛОЖЕНИЯ", "APPENDIX"]
@@ -975,7 +979,7 @@ def check_word_document(file):
                     key = f"Таблица {tbl_num}"
 
                     if not re.match(r'Таблица\s+\d+\s+[-–—]{1,2}\s+', text):
-                        issues.append(f"Таблица {table_counter} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
+                        auto_issues.append(f"Таблица {tbl_num} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
 
                     if text.rstrip().endswith("."):
                         auto_issues.append(f"{key} – удалите точку в конце названия")
@@ -1023,6 +1027,8 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
             if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+            if text.upper() == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
+                auto_issues.append(f"«{text[:50]}» – замените на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
 
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
