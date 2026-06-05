@@ -1042,7 +1042,16 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            if prev_para_empty and not prev_was_section_header:
+                # Проверяем, был ли заголовок раздела среди предыдущих НЕПУСТЫХ абзацев
+            section_header_above = False
+            for k in range(idx - 1, -1, -1):
+                p_text = doc.paragraphs[k].text.strip()
+                if p_text:
+                    if is_section_header(p_text):
+                        section_header_above = True
+                    break
+    # Пустая строка допустима, если выше был заголовок раздела
+            if prev_para_empty and not section_header_above:
                 auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
         if text:
