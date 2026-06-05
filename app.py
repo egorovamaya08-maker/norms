@@ -105,6 +105,11 @@ def is_section_header(text):
             return False
         upper_count = sum(1 for c in clean_letters if c.isupper())
         return upper_count >= len(clean_letters) * 0.8
+        # Заголовок без номера, написанный ЗАГЛАВНЫМИ БУКВАМИ
+    only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
+    if only_letters and len(only_letters) > 3 and only_letters == only_letters.upper():
+        if '«' not in cleaned and '»' not in cleaned:
+            return True
     return False
 
 def normalize_title(text):
@@ -655,44 +660,77 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
     body_elems = list(doc.element.body)
     if body_idx == start_body_pos:
         return True
-
-    blank_count = 0
-    for i in range(body_idx - 1, start_body_pos - 1, -1):
+    
+    # 1. Явные признаки разрыва страницы
+    for i in range(body_idx, start_body_pos - 1, -1):
+        if i < 0:
+            break
         elem = body_elems[i]
-
         if elem.tag == qn('w:sectPr'):
             if i == len(body_elems) - 1:
                 continue
             type_el = elem.find(qn('w:type'))
             val = type_el.get(qn('w:val')) if type_el is not None else None
-            if val == 'continuous':
-                continue
-            return True
-
+            if val != 'continuous':
+                return True
         if elem.tag == qn('w:p'):
             for br in elem.findall('.//w:br', NSMAP):
                 if br.get(qn('w:type')) == 'page':
                     return True
-
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
+                if pPr.find(qn('w:pageBreakBefore')) is not None:
+                    return True
                 sectPr = pPr.find(qn('w:sectPr'))
                 if sectPr is not None:
                     type_el = sectPr.find(qn('w:type'))
                     val = type_el.get(qn('w:val')) if type_el is not None else None
                     if val != 'continuous':
                         return True
-
+    
+    # 2. Косвенные признаки: если элемент является заголовком раздела
+    #    и перед ним мало непустого текста (вероятно, новая страница)
+    current_idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if p._element == body_elems[body_idx]:
+            current_idx = i
+            break
+    
+    if current_idx is not None and current_idx > 0:
+        prev_section_idx = None
+        for i in range(current_idx - 1, -1, -1):
+            p = doc.paragraphs[i]
+            text = p.text.strip()
+            if text and is_section_header(text):
+                prev_section_idx = i
+                break
+        
+        if prev_section_idx is not None:
+            non_empty_count = 0
+            for i in range(prev_section_idx + 1, current_idx):
+                if doc.paragraphs[i].text.strip():
+                    non_empty_count += 1
+            if non_empty_count < 15:
+                return True
+    
+    # 3. Много пустых строк перед элементом
+    blank_count = 0
+    for i in range(body_idx - 1, start_body_pos - 1, -1):
+        elem = body_elems[i]
+        if elem.tag == qn('w:p'):
             if has_content(elem):
-                return blank_count >= min_empty_paragraphs
+                if blank_count >= min_empty_paragraphs:
+                    return True
+                break
             else:
                 blank_count += 1
                 continue
-
         if elem.tag == qn('w:tbl'):
-            return blank_count >= min_empty_paragraphs
-
-    return True
+            if blank_count >= min_empty_paragraphs:
+                return True
+            break
+    
+    return False
 
 def has_content(elem):
     texts = [node.text or '' for node in elem.iter() if node.tag == qn('w:t')]
