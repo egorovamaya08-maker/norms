@@ -1,6 +1,7 @@
 import streamlit as st
 import docx
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.table import Table as DocxTable
 from docx.oxml.ns import qn
 import re
 from collections import defaultdict, Counter
@@ -1241,23 +1242,62 @@ def check_word_document(file):
                                 break
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
-        else:
-            # Название не найдено перед таблицей - ищем текст рядом для диагностики
-            prev_text = ""
-            for i in range(tbl_pos - 1, start_body_pos - 1, -1):
-                elem = body_elems[i]
-                if elem.tag == qn('w:p'):
-                    txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-                    if txt:
-                        prev_text = txt[:50]
-                        break
-            
-            if prev_text:
-                table_issues.append(
-                    f"Таблица (после абзаца «{prev_text}…») – добавьте название перед таблицей"
-                )
             else:
-                table_issues.append("Таблица – добавьте название перед таблицей")
+                # Название не найдено перед таблицей - ищем текст рядом для диагностики
+                prev_text = ""
+                for i in range(tbl_pos - 1, start_body_pos - 1, -1):
+                    elem = body_elems[i]
+                    if elem.tag == qn('w:p'):
+                        txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
+                        if txt:
+                            prev_text = txt[:50]
+                            break
+                
+                if prev_text:
+                    table_issues.append(
+                        f"Таблица (после абзаца «{prev_text}…») – добавьте название перед таблицей"
+                    )
+                else:
+                    table_issues.append("Таблица – добавьте название перед таблицей")
+
+    # --- АНАЛИЗ ВЗАИМНОГО РАСПОЛОЖЕНИЯ ТАБЛИЦ И ПОДПИСЕЙ ---
+    # Дополнительная проверка: ищем подписи, которые идут ПОСЛЕ таблицы
+    for idx, elem in enumerate(body_elems):
+        # Если текущий элемент является таблицей
+        if elem.tag == qn('w:tbl'):
+            # Пропускаем вложенные таблицы
+            if get_table_depth(docx.table.Table(elem, doc)) > 0:
+                continue
+                
+            # Проверяем, что таблица находится в проверяемом диапазоне
+            if not (start_body_pos < idx < end_body_pos):
+                continue
+            
+            # Ищем подпись к этой таблице в ближайших элементах ниже (поиск на 2-3 элемента вперед)
+            caption_found_after = False
+            for look_ahead in range(1, 4):
+                if idx + look_ahead >= len(body_elems):
+                    break
+                
+                next_elem = body_elems[idx + look_ahead]
+                if next_elem.tag == qn('w:p'):
+                    # Получаем текст абзаца
+                    text = ''.join(node.text or '' for node in next_elem.iter() if node.tag == qn('w:t')).strip()
+                    
+                    # Проверяем, содержит ли текст формат подписи таблицы
+                    if re.match(r'^Таблица\s+\d+', text, re.IGNORECASE):
+                        table_num_match = re.search(r'\d+', text)
+                        table_label = f"Таблица {table_num_match.group(0)}" if table_num_match else "Таблица"
+                        
+                        # Проверяем, не является ли это продолжением таблицы
+                        if not is_table_continuation(text):
+                            # Добавляем критический комментарий о неверном расположении
+                            table_issues.append(f"{table_label} – название должно быть ПЕРЕД таблицей (сейчас расположено после)")
+                            caption_found_after = True
+                        break
+                elif next_elem.tag == qn('w:tbl'):
+                    # Если встретили следующую таблицу, прекращаем поиск подписи для текущей
+                    break
 
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
