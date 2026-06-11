@@ -807,7 +807,7 @@ def check_word_document(file):
                 break
         
         if start_idx is not None:
-            auto_issues.append("❌ Отсутствует введение. Проверка начинается с первого найденного раздела.")
+            auto_issues.append("Отсутствует введение, оформленное как заголовок. Проверка начинается с первого найденного раздела.")
 
     # Если нет ни одного раздела
     if start_idx is None:
