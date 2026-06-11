@@ -90,11 +90,24 @@ def is_empty_paragraph(paragraph):
 def has_page_number(text):
     return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
 
-def is_last_element_on_page(p_elem):
-    # Проверяем, есть ли внутри абзаца или сразу за ним разрыв страницы
-    for r in p_elem.findall(qn('w:r')):
-        if r.find(qn('w:br')) is not None and r.find(qn('w:br')).get(qn('w:type')) == 'page':
+def is_last_element_on_page(elem, body_elems, idx):
+    """Возвращает True, если элемент находится в конце страницы (перед разрывом страницы или секции)."""
+    # Смотрим следующие элементы до 5 штук
+    for i in range(idx + 1, min(idx + 5, len(body_elems))):
+        next_elem = body_elems[i]
+        # Если нашли явный разрыв страницы
+        if next_elem.tag == qn('w:p'):
+            for br in next_elem.findall('.//w:br', NSMAP):
+                if br.get(qn('w:type')) == 'page':
+                    return True
+        # Если нашли разрыв секции (новая страница)
+        if next_elem.tag == qn('w:sectPr'):
             return True
+        # Если встретили непустой абзац – страница не кончилась
+        if next_elem.tag == qn('w:p'):
+            txt = ''.join(node.text or '' for node in next_elem.iter() if node.tag == qn('w:t')).strip()
+            if txt:
+                return False
     return False
 
 def is_all_caps(text):
@@ -682,6 +695,7 @@ def get_font_size_pt(paragraph):
 def check_empty_line_before_after(doc, idx, start_idx, label):
     errors = []
     body_elems = list(doc.element.body)
+   
     if idx > start_idx:
         prev_elem = body_elems[idx - 1]
         is_empty_prev = (
@@ -691,6 +705,10 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
         if not is_empty_prev:
             errors.append(f"{label} – добавьте пустую строку перед подписью")
     if idx + 1 < len(body_elems):
+        # Если подпись – последнее на странице, пустая строка не нужна
+        if is_last_element_on_page(body_elems[idx], body_elems, idx):
+            return errors   # ничего не добавляем
+
         next_elem = body_elems[idx + 1]
         is_empty_next = (
             next_elem.tag == qn('w:p') and
@@ -1227,8 +1245,16 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+            has_empty_after = False
+            if idx + 1 < len(doc.paragraphs) and is_empty_paragraph(doc.paragraphs[idx + 1]): 
+                has_empty_after = True
+            if p.paragraph_format.space_after and p.paragraph_format.space_after.pt >= 12:
+                has_empty_after = True
+            if not has_empty_after:
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или задайте интервал после 12 pt)")
+
+
+            
             if text.upper() == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
                 auto_issues.append(f"«{text[:50]}» – замените на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
 
@@ -1364,7 +1390,8 @@ def check_word_document(file):
             continue
         if has_page_number(text):
             continue
-        if text.startswith("Таблица") and not is_table_continuation(text):
+        if re.match(r'^Таблица\s+\d+(?:\.\d+)?\s*[–—\-\.]\s*\S', text) and not is_table_continuation(text):
+      
             tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
             if tbl_match:
                 tbl_num = tbl_match.group(1)
