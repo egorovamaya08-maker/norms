@@ -1139,18 +1139,32 @@ def check_word_document(file):
             continue
         tables_in_range.append((tbl_pos, table))
 
+    # Сортируем таблицы по позиции
+    tables_in_range.sort(key=lambda x: x[0])
+    # Сортируем подписи по позиции
+    table_captions_info.sort(key=lambda x: x['body_idx'] if x['body_idx'] is not None else -1)
+
     table_issues = []
+    used_captions = set()  # Отслеживаем уже использованные подписи
 
     for tbl_pos, table in tables_in_range:
         caption_info = None
-        for cap in table_captions_info:
+        
+        # Ищем ближайшую подпись ПЕРЕД таблицей
+        for i, cap in enumerate(table_captions_info):
+            if i in used_captions:
+                continue
             if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
+                # Проверяем, что между подписью и таблицей нет других таблиц
                 other_tables_between = any(
                     other_pos < tbl_pos and other_pos > cap['body_idx']
                     for other_pos, _ in tables_in_range
                 )
                 if not other_tables_between:
                     caption_info = cap
+                    used_captions.add(i)  # Помечаем подпись как использованную
+                    break
+        
         if caption_info:
             key = caption_info['key']
             tbl_num = caption_info['number_str']
@@ -1185,14 +1199,16 @@ def check_word_document(file):
                     next_tbl_pos = end_body_pos
                 markers_found = False
                 for i in range(tbl_pos + 1, next_tbl_pos):
-                    if i < len(doc.paragraphs):
-                        txt = doc.paragraphs[i].text.strip()
-                        if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
-                            markers_found = True
-                            break
+                    if i < len(body_elems):
+                        if body_elems[i].tag == qn('w:p'):
+                            txt = ''.join(node.text or '' for node in body_elems[i].iter() if node.tag == qn('w:t')).strip()
+                            if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
+                                markers_found = True
+                                break
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
+            # Ищем текст после таблицы для диагностики
             prev_text = ""
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
                 elem = body_elems[i]
@@ -1201,10 +1217,22 @@ def check_word_document(file):
                     if txt:
                         prev_text = txt[:50]
                         break
-            table_issues.append(
-                f"Таблица – название должно быть перед таблицей (расположена после абзаца: «{prev_text}…»)" if prev_text
-                else "Таблица – название должно быть перед таблицей"
-            )
+            # Проверяем, может название внутри таблицы или после неё
+            next_text = ""
+            for i in range(tbl_pos + 1, min(tbl_pos + 5, len(body_elems))):
+                elem = body_elems[i]
+                if elem.tag == qn('w:p'):
+                    txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
+                    if txt:
+                        next_text = txt[:50]
+                        break
+            
+            if prev_text:
+                table_issues.append(
+                    f"Таблица (после абзаца «{prev_text}…») – название должно быть перед таблицей"
+                )
+            else:
+                table_issues.append("Таблица – название должно быть перед таблицей")
 
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
