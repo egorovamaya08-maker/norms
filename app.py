@@ -1368,8 +1368,8 @@ def check_word_document(file):
                         break
                 if current_tbl_index is not None and current_tbl_index + 1 < len(tables_in_range):
                     next_tbl_pos = tables_in_range[current_tbl_index + 1][0]
-                else:
-                    next_tbl_pos = end_body_pos
+            else:
+                next_tbl_pos = end_body_pos
                 
                 markers_found = False
                 for i in range(tbl_pos + 1, next_tbl_pos):
@@ -1383,28 +1383,46 @@ def check_word_document(file):
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
 
             else:
-                # Название не найдено перед таблицей - ищем текст рядом для диагностики
+                # Название не найдено перед таблицей - анализируем элементы строго вверх
                 prev_text = ""
-                for i in range(tbl_pos - 1, start_body_pos - 1, -1):
+                has_continuation_marker = False
+                
+                # Проверяем до 3-4 элементов вверх, включая пустые абзацы,
+                # чтобы случайно не "перепрыгнуть" через маркер продолжения к началу первой таблицы
+                check_limit = max(start_body_pos - 1, tbl_pos - 5)
+                for i in range(tbl_pos - 1, check_limit, -1):
                     elem = body_elems[i]
                     if elem.tag == qn('w:p'):
                         txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-                        if txt:
-                            prev_text = txt[:50]
+                        
+                        # Если нашли маркер переноса — фиксируем его
+                        if txt and (("продолжение" in txt.lower()) or ("окончание" in txt.lower())):
+                            prev_text = txt
+                            has_continuation_marker = True
                             break
-                
+                        
+                        # Если встретили обычный текст (не маркер), запоминаем для диагностики
+                        if txt and not prev_text:
+                            prev_text = txt
+                            
+                    # Если упёрлись в предыдущую таблицу (w:tbl), значит маркер забыли вставить
+                    elif elem.tag == qn('w:tbl'):
+                        break
+
                 # ПРОВЕРКА НА ПЕРЕНОС ТАБЛИЦЫ:
-                # Если перед таблицей "Продолжение таблицы..." или "Окончание таблицы...",
-                # то это часть перенесённой таблицы — название не требуется
-                if is_table_continuation(prev_text):
+                if has_continuation_marker or is_table_continuation(prev_text):
+                    # Это легитимное продолжение таблицы, ошибку не генерируем
                     pass
                 else:
                     if prev_text:
+                        # Обрезаем для красивого вывода в отчет
+                        diag_text = prev_text[:50]
                         table_issues.append(
-                            f"Таблица (после абзаца «{prev_text}…») – добавьте название перед таблицей"
+                            f"Таблица (после абзаца «{diag_text}…») – добавьте название перед таблицей"
                         )
                     else:
                         table_issues.append("Таблица – добавьте название перед таблицей")
+                        
 
     # --- АНАЛИЗ ВЗАИМНОГО РАСПОЛОЖЕНИЯ ТАБЛИЦ И ПОДПИСЕЙ ---
     # Дополнительная проверка: ищем подписи, которые идут ПОСЛЕ таблицы
