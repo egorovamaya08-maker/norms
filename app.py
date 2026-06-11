@@ -693,6 +693,77 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
     if body_idx == start_body_pos:
         return True
     
+    # 1. Явные признаки разрыва страницы (XML)
+    for i in range(body_idx, start_body_pos - 1, -1):
+        if i < 0:
+            break
+        elem = body_elems[i]
+        if elem.tag == qn('w:sectPr'):
+            if i == len(body_elems) - 1:
+                continue
+            type_el = elem.find(qn('w:type'))
+            val = type_el.get(qn('w:val')) if type_el is not None else None
+            if val != 'continuous':
+                return True
+        if elem.tag == qn('w:p'):
+            for br in elem.findall('.//w:br', NSMAP):
+                if br.get(qn('w:type')) == 'page':
+                    return True
+            pPr = elem.find(qn('w:pPr'))
+            if pPr is not None:
+                if pPr.find(qn('w:pageBreakBefore')) is not None:
+                    return True
+                sectPr = pPr.find(qn('w:sectPr'))
+                if sectPr is not None:
+                    type_el = sectPr.find(qn('w:type'))
+                    val = type_el.get(qn('w:val')) if type_el is not None else None
+                    if val != 'continuous':
+                        return True
+    
+    # 2. Косвенные признаки: если перед элементом мало текста с начала предыдущего крупного заголовка
+    current_idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if p._element == body_elems[body_idx]:
+            current_idx = i
+            break
+    
+    if current_idx is not None and current_idx > 0:
+        prev_section_idx = None
+        for i in range(current_idx - 1, -1, -1):
+            p = doc.paragraphs[i]
+            text = p.text.strip()
+            # ИСПРАВЛЕНИЕ: Ловим и разделы, и подразделы, чтобы точнее понимать контекст страницы
+            if text and (is_section_header(text) or is_subsection_header(text)):
+                prev_section_idx = i
+                break
+        
+        if prev_section_idx is not None:
+            non_empty_count = 0
+            for i in range(prev_section_idx + 1, current_idx):
+                if doc.paragraphs[i].text.strip():
+                    non_empty_count += 1
+            if non_empty_count < 15:
+                return True
+    
+    # 3. Много пустых строк перед элементом
+    blank_count = 0
+    for i in range(body_idx - 1, start_body_pos - 1, -1):
+        elem = body_elems[i]
+        if elem.tag == qn('w:p'):
+            if has_content(elem):
+                if blank_count >= min_empty_paragraphs:
+                    return True
+                break
+            else:
+                blank_count += 1
+                continue
+        if elem.tag == qn('w:tbl'):
+            if blank_count >= min_empty_paragraphs:
+                return True
+            break
+    
+    return False
+    
     # 1. Явные признаки разрыва страницы
     for i in range(body_idx, start_body_pos - 1, -1):
         if i < 0:
@@ -1078,6 +1149,8 @@ def check_word_document(file):
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
             first_line = get_effective_first_line_indent(p)
+            
+            # --- Ваши стандартные проверки (сохраняем) ---
             if abs(first_line - 1.0) > 0.2:
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             if not is_paragraph_bold(p):
@@ -1086,7 +1159,8 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-                # Проверяем, был ли заголовок раздела среди предыдущих НЕПУСТЫХ абзацев
+                
+            # Проверяем, что было выше заголовка
             section_header_above = False
             for k in range(idx - 1, -1, -1):
                 p_text = doc.paragraphs[k].text.strip()
@@ -1094,10 +1168,39 @@ def check_word_document(file):
                     if is_section_header(p_text):
                         section_header_above = True
                     break
-    # Пустая строка допустима, если выше был заголовок раздела
-            if prev_para_empty and not section_header_above:
-                auto_issues.append(f"{key} – уберите пустую строку перед подразделом")
 
+            # ============================================================
+            # НОВЫЙ ИСПРАВЛЕННЫЙ БЛОК ПРОВЕРКИ ПУСТОЙ СТРОКИ ПЕРЕД ПОДРАЗДЕЛОМ
+            # ============================================================
+            if idx > 0:
+                prev_p = doc.paragraphs[idx - 1]
+                prev_txt = prev_p.text.strip()
+                
+                # Если перед подразделом НЕТ пустой строки, начинаем разбираться
+                if prev_txt != "":
+                    # Получаем индекс элемента в XML для функции проверки страниц
+                    try:
+                        body_elems = list(doc.element.body)
+                        body_idx = body_elems.index(p._element)
+                    except:
+                        body_idx = -1
+                    
+                    # 1. Если это естественный перенос на новую страницу — игнорируем отсутствие строки
+                    if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
+                        pass 
+                    
+                    
+                    # 2. Если прямо перед ним идет другой заголовок — это явная автоматическая ошибка
+                    elif is_section_header(prev_txt) or re.match(r'^\d+\.\d+', prev_txt):
+                        auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
+                    
+                    # 3. Если перед ним обычный текст — отправляем на ручную проверку на случай скрытого переноса
+                    else:
+                        manual_issues.append(
+                            f"{key} – проверьте визуально: если он естественно перенесся на новую страницу, то отступ перед ним не нужен. "
+                            f"Если он идет внутри страницы, добавьте пустую строку."
+                        )
+            # ============================================================
         if text:
             prev_para_empty = False
             prev_was_formula = False
