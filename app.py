@@ -90,6 +90,13 @@ def is_empty_paragraph(paragraph):
 def has_page_number(text):
     return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
 
+def is_last_element_on_page(p_elem):
+    # Проверяем, есть ли внутри абзаца или сразу за ним разрыв страницы
+    for r in p_elem.findall(qn('w:r')):
+        if r.find(qn('w:br')) is not None and r.find(qn('w:br')).get(qn('w:type')) == 'page':
+            return True
+    return False
+
 def is_all_caps(text):
     clean_text = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', text)
     if not clean_text:
@@ -694,11 +701,7 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
     return errors
 
 def is_subsection_header(text):
-    """Проверяет, является ли текст заголовком подраздела"""
-    cleaned = normalize_text(text)
-    if not cleaned:
-        return False
-    if re.match(r'^\d+\.\d+(\.\d+)?\s*[А-Яа-яA-Za-z]', cleaned):
+    if re.match(r'^\d+\.\d+(\.\d+)?\s+', text.strip()):
         return True
     return False
     
