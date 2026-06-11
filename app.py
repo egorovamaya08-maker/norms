@@ -574,16 +574,32 @@ def group_issues(issues_list):
         for k in caption_msgs_keys:
             grouped[k].append("Исправьте название на «Таблица " + k.split()[-1] + " – Название»")
 
-    before_msgs = [issue for issue in standalone if issue.startswith("Таблица – название должно быть перед таблицей")]
+# ==================== ЗАМЕНИТЬ ЭТОТ БЛОК ====================
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ДЛЯ ПРОВЕРКИ РАСПОЛОЖЕНИЯ НАЗВАНИЯ ТАБЛИЦЫ ---
+    # 1. Проверяем сообщения, которые попали в standalone (без конкретных номеров)
+    before_msgs = [issue for issue in standalone if "название должно быть перед таблицей" in issue]
     if len(before_msgs) >= 2:
         for msg in before_msgs:
-            standalone.remove(msg)
+            if msg in standalone:
+                standalone.remove(msg)
         standalone.insert(0, "Таблицы – название должно быть перед таблицей")
-    before_keys = [k for k, v in grouped.items() if k == "Таблица" and any(m.startswith("название должно быть перед таблицей") for m in v)]
-    if len(before_keys) >= 2:
-        for k in before_keys:
-            del grouped[k]
-        standalone.insert(0, "Таблицы – название должно быть перед таблицей")
+
+    # 2. Проверяем сообщения, которые привязались к конкретным номерам таблиц (например, "Таблица 2")
+    tables_with_before_error = []
+    for k, v in list(grouped.items()):
+        if k.startswith("Таблица ") and any("название должно быть перед таблицей" in m for m in v):
+            tables_with_before_error.append(k)
+            
+    # Если таких таблиц много (>= 2), выносим в общее правило "Таблицы – ..."
+    if len(tables_with_before_error) >= 2:
+        for k in tables_with_before_error:
+            # Удаляем только конкретное сообщение из списка ошибок этой таблицы
+            grouped[k] = [m for m in grouped[k] if "название должно быть перед таблицей" not in m]
+            # Если у таблицы больше не осталось ошибок, удаляем её из группы совсем
+            if not grouped[k]:
+                del grouped[k]
+        if "Таблицы – название должно быть перед таблицей" not in standalone:
+            standalone.insert(0, "Таблицы – название должно быть перед таблицей")
 
     table_common_msgs = [issue for issue in standalone if issue.startswith("Таблицы –")]
     if len(table_common_msgs) > 1:
