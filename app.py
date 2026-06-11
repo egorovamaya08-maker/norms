@@ -762,17 +762,39 @@ def check_word_document(file):
 
     # --- ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ---
     start_idx = None
+    intro_found = False
+    auto_issues = []
+
+    # Ищем "ВВЕДЕНИЕ"
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
         if not txt:
             continue
         if has_page_number(txt):
             continue
-        if is_section_header(txt):
+        if txt.upper() == "ВВЕДЕНИЕ" and is_section_header(txt):
+            intro_found = True
             start_idx = i
             break
+
+    # Если не нашли "ВВЕДЕНИЕ" — ищем любой раздел
+    if not intro_found:
+        for i, p in enumerate(doc.paragraphs):
+            txt = p.text.strip()
+            if not txt:
+                continue
+            if has_page_number(txt):
+                continue
+            if is_section_header(txt):
+                start_idx = i
+                break
+        
+        if start_idx is not None:
+            auto_issues.append("❌ Отсутствует введение. Проверка начинается с первого найденного раздела.")
+
+    # Если нет ни одного раздела
     if start_idx is None:
-        return ["✅ Ошибок не найдено. Документ соответствует чек-листу."]
+        return ["❌ Отсутствует введение. Документ не содержит заголовков разделов."]
 
     # --- НУМЕРАЦИЯ СТРАНИЦ ---
     try:
