@@ -1358,8 +1358,21 @@ if uploaded_file is not None:
     with st.spinner("Проверяем..."):
         results = check_word_document(uploaded_file)
     st.subheader("Результаты проверки:")
-    for r in results:
-        if r.startswith("📋"):
-            st.markdown(f"**{r}**")
-        else:
-            st.write(f"• {r}")
+    
+    # Проверяем, есть ли реальные ошибки (исключая informational messages)
+    real_issues = [r for r in results if not r.startswith("📋") and not r.startswith("❌ Отсутствует введение")]
+    manual_section = [r for r in results if r.startswith("📋")]
+    
+    if len(real_issues) == 0 and len(manual_section) == 0:
+        st.success("✅ Все оформлено верно.")
+        st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
+    else:
+        for r in results:
+            if r.startswith("📋"):
+                st.markdown(f"**{r}**")
+            else:
+                st.write(f"• {r}")
+        
+        # Если ошибок нет, но есть секция "Для проверки человеком"
+        if len(real_issues) == 0 and len(manual_section) > 0:
+            st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
