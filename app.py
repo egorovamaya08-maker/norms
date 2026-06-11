@@ -941,13 +941,13 @@ def check_word_document(file):
 
                 if norm_text.startswith("Рис."):
                     auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
-                if re.match(r'Рисунок\s*:', norm_text):
-                    auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
-                if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
-                    if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
-                        auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
-                    else:
-                        auto_issues.append(f"{fig_number} – должно быть тире после номера")
+            #    if re.match(r'Рисунок\s*:', norm_text):
+            #        auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
+            #    if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
+           #         if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
+            #            auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
+            #        else:
+            #            auto_issues.append(f"{fig_number} – должно быть тире после номера")
                 if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.CENTER:
                     auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
                 if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
