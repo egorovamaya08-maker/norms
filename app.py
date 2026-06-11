@@ -996,8 +996,6 @@ def check_word_document(file):
                 tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
                 if tbl_match:
                     tbl_num = tbl_match.group(1)
-                    tbl_num_float = float(tbl_num)
-                    table_numbers_found.append(tbl_num_float)
                     key = f"Таблица {tbl_num}"
 
                     if not re.match(r'Таблица\s+\d+\s+[-–—]{1,2}\s+', text):
@@ -1010,14 +1008,6 @@ def check_word_document(file):
                         if any(abs(s - 14) > 0.5 for s in sizes):
                             auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
 
-                    table_captions_info.append({
-                        'para_idx': idx,
-                        'body_idx': para_to_body_idx.get(idx),
-                        'number': tbl_num_float,
-                        'number_str': tbl_num,
-                        'text': text,
-                        'key': key
-                    })
                 prev_para_empty = False
                 continue
 
@@ -1117,6 +1107,7 @@ def check_word_document(file):
                 table_seq_issues.append("Таблицы – неверная нумерация")
 
     # --- ТАБЛИЦЫ ---
+       # --- ТАБЛИЦЫ ---
     end_body_pos = len(body_elems)
     if lit_start is not None:
         try:
@@ -1139,40 +1130,80 @@ def check_word_document(file):
             continue
         tables_in_range.append((tbl_pos, table))
 
-    # Сортируем таблицы по позиции
+    # Сортируем таблицы по позиции в документе
     tables_in_range.sort(key=lambda x: x[0])
-    # Сортируем подписи по позиции
-    table_captions_info.sort(key=lambda x: x['body_idx'] if x['body_idx'] is not None else -1)
+    
+    # Заново собираем подписи таблиц с ТОЧНЫМИ body_idx
+    table_captions_info = []
+    for idx in range(start_idx, end_idx):
+        p = doc.paragraphs[idx]
+        text = p.text.strip()
+        if not text:
+            continue
+        if has_page_number(text):
+            continue
+        if text.startswith("Таблица") and not is_table_continuation(text):
+            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
+            if tbl_match:
+                tbl_num = tbl_match.group(1)
+                tbl_num_float = float(tbl_num)
+                table_numbers_found.append(tbl_num_float)
+                key = f"Таблица {tbl_num}"
+                
+                # Находим точный body_idx через элемент абзаца
+                try:
+                    body_idx = body_elems.index(p._element)
+                except:
+                    body_idx = None
+                
+                table_captions_info.append({
+                    'para_idx': idx,
+                    'body_idx': body_idx,
+                    'number': tbl_num_float,
+                    'number_str': tbl_num,
+                    'text': text,
+                    'key': key
+                })
 
     table_issues = []
-    used_captions = set()  # Отслеживаем уже использованные подписи
+    used_captions = set()
 
     for tbl_pos, table in tables_in_range:
         caption_info = None
         
-        # Ищем ближайшую подпись ПЕРЕД таблицей
+        # Ищем ближайшую НЕиспользованную подпись ПЕРЕД таблицей
+        best_cap = None
+        best_distance = float('inf')
+        
         for i, cap in enumerate(table_captions_info):
             if i in used_captions:
                 continue
             if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
-                # Проверяем, что между подписью и таблицей нет других таблиц
-                other_tables_between = any(
-                    other_pos < tbl_pos and other_pos > cap['body_idx']
-                    for other_pos, _ in tables_in_range
-                )
-                if not other_tables_between:
-                    caption_info = cap
-                    used_captions.add(i)  # Помечаем подпись как использованную
-                    break
+                distance = tbl_pos - cap['body_idx']
+                if distance < best_distance:
+                    # Проверяем, что между подписью и таблицей нет других таблиц
+                    other_tables_between = any(
+                        other_pos < tbl_pos and other_pos > cap['body_idx']
+                        for other_pos, _ in tables_in_range
+                    )
+                    if not other_tables_between:
+                        best_distance = distance
+                        best_cap = (i, cap)
+        
+        if best_cap is not None:
+            i, caption_info = best_cap
+            used_captions.add(i)
         
         if caption_info:
             key = caption_info['key']
             tbl_num = caption_info['number_str']
 
+            # Проверка пустых строк вокруг названия таблицы
             if caption_info['body_idx'] is not None:
                 empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
                 table_issues.extend(empty_errors)
 
+            # Проверка на полужирный шрифт внутри таблицы
             bold_in_table = False
             for row in table.rows:
                 for cell in row.cells:
@@ -1187,7 +1218,9 @@ def check_word_document(file):
             if bold_in_table:
                 table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
 
+            # Проверка продолжения таблицы
             if len(table.rows) > 2:
+                # Ищем следующую таблицу или конец документа
                 current_tbl_index = None
                 for i, (pos, _) in enumerate(tables_in_range):
                     if pos == tbl_pos:
@@ -1197,6 +1230,7 @@ def check_word_document(file):
                     next_tbl_pos = tables_in_range[current_tbl_index + 1][0]
                 else:
                     next_tbl_pos = end_body_pos
+                
                 markers_found = False
                 for i in range(tbl_pos + 1, next_tbl_pos):
                     if i < len(body_elems):
@@ -1208,7 +1242,7 @@ def check_word_document(file):
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
         else:
-            # Ищем текст после таблицы для диагностики
+            # Название не найдено перед таблицей - ищем текст рядом для диагностики
             prev_text = ""
             for i in range(tbl_pos - 1, start_body_pos - 1, -1):
                 elem = body_elems[i]
@@ -1217,22 +1251,13 @@ def check_word_document(file):
                     if txt:
                         prev_text = txt[:50]
                         break
-            # Проверяем, может название внутри таблицы или после неё
-            next_text = ""
-            for i in range(tbl_pos + 1, min(tbl_pos + 5, len(body_elems))):
-                elem = body_elems[i]
-                if elem.tag == qn('w:p'):
-                    txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-                    if txt:
-                        next_text = txt[:50]
-                        break
             
             if prev_text:
                 table_issues.append(
-                    f"Таблица (после абзаца «{prev_text}…») – название должно быть перед таблицей"
+                    f"Таблица (после абзаца «{prev_text}…») – добавьте название перед таблицей"
                 )
             else:
-                table_issues.append("Таблица – название должно быть перед таблицей")
+                table_issues.append("Таблица – добавьте название перед таблицей")
 
     auto_issues.extend(table_seq_issues)
     auto_issues.extend(table_issues)
