@@ -11,6 +11,11 @@ import unicodedata
 
 NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 
+TABLE_CONTINUATION_RE = re.compile(
+    r'^(продолжение|окончание)\s+таблицы\s+\d+', 
+    re.IGNORECASE
+)
+
 # ------------------------------------------------------------
 # Нормализация текста: удаление невидимок, замена пробелов
 # ------------------------------------------------------------
@@ -1376,6 +1381,7 @@ def check_word_document(file):
                                 break
                 if not markers_found:
                     manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
+
             else:
                 # Название не найдено перед таблицей - ищем текст рядом для диагностики
                 prev_text = ""
@@ -1387,12 +1393,15 @@ def check_word_document(file):
                             prev_text = txt[:50]
                             break
                 
-                if prev_text:
-                    table_issues.append(
+                if is_table_continuation(prev_text):
+                    pass  # Ничего не делаем, это нормально для перенесённой таблицы
+                else:
+                    if prev_text:
+                        table_issues.append(
                         f"Таблица (после абзаца «{prev_text}…») – добавьте название перед таблицей"
                     )
-                else:
-                    table_issues.append("Таблица – добавьте название перед таблицей")
+                    else:
+                        table_issues.append("Таблица – добавьте название перед таблицей")
 
     # --- АНАЛИЗ ВЗАИМНОГО РАСПОЛОЖЕНИЯ ТАБЛИЦ И ПОДПИСЕЙ ---
     # Дополнительная проверка: ищем подписи, которые идут ПОСЛЕ таблицы
