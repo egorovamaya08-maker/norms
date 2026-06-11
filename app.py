@@ -229,14 +229,28 @@ def get_list_marker_info(paragraph, doc):
 
 def get_effective_first_line_indent(paragraph):
     pf = paragraph.paragraph_format
+    # 1. Если у абзаца ЕСТЬ собственный (локальный) отступ, возвращаем его
     if pf.first_line_indent is not None:
         return pf.first_line_indent.cm
+        
+    # ============================================================
+    # ИСПРАВЛЕНИЕ: Игнорируем встроенные отступы стилей заголовков
+    # ============================================================
+    if paragraph.style and paragraph.style.name.startswith('Heading'):
+        return 0
+    if paragraph.style and 'Заголовок' in paragraph.style.name:
+        return 0
+    # ============================================================
+
+    # 2. Если локального отступа нет, пытаемся взять отступ из стиля абзаца
     try:
         style = paragraph.style
         if style and style.paragraph_format.first_line_indent is not None:
             return style.paragraph_format.first_line_indent.cm
     except:
         pass
+
+    # 3. Глубокий поиск в XML (на случай, если python-docx не увидел свойства напрямую)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -250,6 +264,7 @@ def get_effective_first_line_indent(paragraph):
                     return 0
     except:
         pass
+
     return 0
 
 def get_effective_left_indent(paragraph):
