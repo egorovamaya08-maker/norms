@@ -1512,8 +1512,7 @@ def check_word_document(file):
             # Сдвигаем индекс, чтобы пропустить возможное название, если оно ошибочно идёт после таблицы
             check_idx = idx + 2 if has_title_after else idx + 1
 
-            if check_idx < len(elements):
-               # --- ИСПРАВЛЕННЫЙ БЛОК ---
+            
             if check_idx < len(elements):
                 next_item = elements[check_idx]
                 if isinstance(next_item, docx.text.paragraph.Paragraph):
