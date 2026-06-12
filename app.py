@@ -1316,7 +1316,7 @@ def check_word_document(file):
             if not has_proper_spacing_after_header(doc, idx):
                 auto_issues.append(
                     f"«{key}» – после заголовка должна быть пустая строка "
-                    f"(или интервал после ≥ 12 pt)"
+                    f"(или интервал после ≥ 12 pt)")
                     
            # --- ИСПРАВЛЕНИЕ ЛОЖНОГО СРАБАТЫВАНИЯ ДЛЯ ВВЕДЕНИЯ ---
           
