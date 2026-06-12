@@ -1173,15 +1173,17 @@ def check_word_document(file):
 
         is_level1 = is_section_header(norm_text)
         is_subsection = False
+        if 'heading 2' in style_name or 'заголовок 2' in style_name or 'heading 3' in style_name or 'заголовок 3' in style_name:
+            is_subsection = True
+        elif re.match(r'^\d+(\.\d+)+\.?\s+', text):  # ФИКС: ловит "1.1. " и "1.1 "
+            is_subsection = True
 
-        if not is_level1:
-            if re.match(r'^\d+\.\d+(\.\d+)?\s*[А-Яа-я]', norm_text):
-                is_subsection = True
-            else:
-                normalized = normalize_title(norm_text)
-                in_toc = any(normalize_title(e) == normalized for e in toc_entries) if toc_entries else False
-                if in_toc and len(text) > 20:
-                    is_subsection = True
+# Для подзаголовков: проверяем, что после нет пустой строки
+if is_subsection:
+    if idx + 1 < len(doc.paragraphs):
+        next_p = doc.paragraphs[idx + 1]
+        if is_empty_paragraph(next_p):
+            auto_issues.append(f"Подраздел «{text[:50]}» – после подзаголовка не должно быть пустой строки")
 
         if is_level1 or is_subsection:
             if is_level1:
