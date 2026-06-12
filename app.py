@@ -1245,13 +1245,28 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – выровняйте заголовок по центру")
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
+           # --- ИСПРАВЛЕНИЕ ЛОЖНОГО СРАБАТЫВАНИЯ ДЛЯ ВВЕДЕНИЯ ---
             has_empty_after = False
+            
+            # 1. Проверяем, есть ли физическая пустая строка после заголовка
             if idx + 1 < len(doc.paragraphs) and is_empty_paragraph(doc.paragraphs[idx + 1]): 
                 has_empty_after = True
-            if p.paragraph_format.space_after and p.paragraph_format.space_after.pt >= 12:
+                
+            # 2. Проверяем локальный интервал после абзаца
+            if p.paragraph_format.space_after and p.paragraph_format.space_after.pt >= 11.5:
                 has_empty_after = True
+                
+            # 3. Проверяем интервал, зашитый внутри стиля самого заголовка
+            try:
+                if p.style and p.style.paragraph_format.space_after and p.style.paragraph_format.space_after.pt >= 11.5:
+                    has_empty_after = True
+            except:
+                pass
+                
+            # Если ни один из вариантов отступа не найден, выдаем ошибку
             if not has_empty_after:
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или задайте интервал после 12 pt)")
+            # -----------------------------------------------------
 
 
             
