@@ -958,28 +958,20 @@ def has_content(elem):
     return False
 
 def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
-    """Надёжная проверка отступа после заголовка 1 уровня"""
+    """
+    Надёжная комплексная проверка отступа после заголовка 1 уровня.
+    Сочетает lookahead-сканирование последующих абзацев и многоуровневый
+    анализ свойств абзацев (Python API, Стили, OpenXML).
+    """
     if header_idx + 1 >= len(doc.paragraphs):
         return False
 
     curr_p = doc.paragraphs[header_idx]
-    next_p = doc.paragraphs[header_idx + 1]
 
-    # 1. Пустой абзац (самый надёжный признак)
-    if is_empty_paragraph(next_p):
-        return True
-
-    # 2. Проверка интервала перед следующим абзацем
-    try:
-        if next_p.paragraph_format.space_before and next_p.paragraph_format.space_before.pt >= 8:
-            return True
-        if (next_p.style and next_p.style.paragraph_format.space_before and 
-            next_p.style.paragraph_format.space_before.pt >= 8):
-            return True
-    except:
-        pass
-
-    # 3. Проверка интервала после самого заголовка
+    # =========================================================================
+    # БЛОК 1. Проверка интервала ПОСЛЕ самого заголовка (space_after)
+    # =========================================================================
+    # 1.1. Проверка через высокоуровневое API python-docx (явный интервал или стиль)
     try:
         if curr_p.paragraph_format.space_after and curr_p.paragraph_format.space_after.pt >= 8:
             return True
@@ -989,35 +981,53 @@ def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
     except:
         pass
 
-    # 4. Глубокая XML-проверка (самый важный блок)
+    # 1.2. Проверка низкоуровневого OpenXML (w:spaceAfter локального переопределения)
     try:
-        # Проверяем следующий абзац
-        pPr = next_p._element.find(qn('w:pPr'))
-        if pPr is not None:
-            spacing = pPr.find(qn('w:spacing'))
-            if spacing is not None:
-                before = spacing.get(qn('w:before'))
-                if before and int(before) >= 160:   # ≈8-12 pt
-                    return True
-    except:
-        pass
-
-    try:
-        # Проверяем текущий заголовок
         pPr = curr_p._element.find(qn('w:pPr'))
         if pPr is not None:
             spacing = pPr.find(qn('w:spacing'))
             if spacing is not None:
                 after = spacing.get(qn('w:after'))
+                # 160 dxa = 8 pt (1 pt = 20 dxa)
                 if after and int(after) >= 160:
                     return True
     except:
         pass
 
-    # 5. Проверяем 1-2 следующих абзаца
+
+    # =========================================================================
+    # БЛОК 2. Lookahead-сканирование последующих элементов (окно в 4 абзаца)
+    # =========================================================================
+    # Ищем либо физический пустой абзац, либо текст с отступом ПЕРЕД ним (space_before)
     for i in range(header_idx + 1, min(header_idx + 5, len(doc.paragraphs))):
-        if is_empty_paragraph(doc.paragraphs[i]):
+        next_p = doc.paragraphs[i]
+        
+        # 2.1. Физический пустой абзац (перевод строки) — легитимный разделитель
+        if is_empty_paragraph(next_p):
             return True
+
+        # 2.2. Высокуровневая проверка интервала ПЕРЕД следующим абзацем (API + стили)
+        try:
+            pf = next_p.paragraph_format
+            if pf.space_before and pf.space_before.pt >= 8:
+                return True
+            if (next_p.style and next_p.style.paragraph_format.space_before and 
+                next_p.style.paragraph_format.space_before.pt >= 8):
+                return True
+        except:
+            pass
+
+        # 2.3. Низкоуровневая OpenXML-проверка интервала ПЕРЕД следующим абзацем
+        try:
+            pPr = next_p._element.find(qn('w:pPr'))
+            if pPr is not None:
+                spacing = pPr.find(qn('w:spacing'))
+                if spacing is not None:
+                    before = spacing.get(qn('w:before'))
+                    if before and int(before) >= 160:   # 160 dxa = 8 pt
+                        return True
+        except:
+            pass
 
     return False
 # ------------------------------------------------------------
