@@ -8,6 +8,7 @@ from collections import defaultdict, Counter
 import zipfile
 from lxml import etree
 import unicodedata
+from docx.shared import Cm, Pt, Inches
 
 NSMAP = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 
@@ -266,51 +267,48 @@ def get_effective_first_line_indent(paragraph):
     # 1. Если у абзаца ЕСТЬ собственный (локальный) отступ, возвращаем его
     if pf.first_line_indent is not None:
         return pf.first_line_indent.cm
-        
-    # ============================================================
-    # ИСПРАВЛЕНИЕ: Игнорируем встроенные отступы стилей заголовков
-    # ============================================================
-    if paragraph.style and paragraph.style.name.startswith('Heading'):
-        return 0
-    if paragraph.style and 'Заголовок' in paragraph.style.name:
-        return 0
-    # ============================================================
 
-    # 2. Если локального отступа нет, пытаемся взять отступ из стиля абзаца
+    # 2. Если локального отступа нет, берем отступ из стиля абзаца или его родительских стилей
     try:
-        style = paragraph.style
-        if style and style.paragraph_format.first_line_indent is not None:
-            return style.paragraph_format.first_line_indent.cm
+        current_style = paragraph.style
+        while current_style is not None:
+            if current_style.paragraph_format.first_line_indent is not None:
+                return current_style.paragraph_format.first_line_indent.cm
+            current_style = current_style.base_style
     except:
         pass
 
-    # 3. Глубокий поиск в XML (на случай, если python-docx не увидел свойства напрямую)
+    # 3. Глубокий поиск в XML (на случай, если свойства заданы через твипы напрямую в pPr)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
             ind = pPr.find(qn('w:ind'))
             if ind is not None:
                 first_line = ind.get(qn('w:firstLine'))
-                hanging = ind.get(qn('w:hanging'))
                 if first_line is not None:
-                    return int(first_line) / 567
-                elif hanging is not None:
-                    return 0
+                    return int(first_line) / 567  # Перевод твипов в см
     except:
         pass
 
-    return 0
+    return 0.0
 
 def get_effective_left_indent(paragraph):
     pf = paragraph.paragraph_format
+    # 1. Локальный левый отступ
     if pf.left_indent is not None:
         return pf.left_indent.cm
+        
+    # 2. Левый отступ из стилей
     try:
-        style = paragraph.style
-        if style and style.paragraph_format.left_indent is not None:
-            return style.paragraph_format.left_indent.cm
+        current_style = paragraph.style
+        while current_style is not None:
+            if current_style.paragraph_format.left_indent is not None:
+                return current_style.paragraph_format.left_indent.cm
+            current_style = current_style.base_style
     except:
         pass
+        
+    # 3. Левый отступ из XML
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -321,7 +319,8 @@ def get_effective_left_indent(paragraph):
                     return int(left) / 567
     except:
         pass
-    return 0
+        
+    return 0.0
 
 def is_table_continuation(text):
     return bool(re.match(r'^(?:Продолжение|Окончание)\s+таблицы?\s*\d', text))
