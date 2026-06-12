@@ -1582,23 +1582,43 @@ uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
 if uploaded_file is not None:
     with st.spinner("Проверяем..."):
         results = check_word_document(uploaded_file)
+    
     st.subheader("Результаты проверки:")
-
     
-    # Проверяем, есть ли реальные ошибки (исключая informational messages)
-    real_issues = [r for r in results if not r.startswith("📋") and not r.startswith("❌ Отсутствует введение")]
-    manual_section = [r for r in results if r.startswith("📋")]
+    # Разделяем автоматические ошибки и ручные проверки
+    manual_mode = False
+    auto_errors = []
+    manual_items = []
     
-    if len(real_issues) == 0 and len(manual_section) == 0:
-        st.success("✅ Все оформлено верно.")
-        st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
+    for r in results:
+        if r.startswith("📋 Для проверки человеком:"):
+            manual_mode = True
+            continue
+        if manual_mode:
+            manual_items.append(r)
+        else:
+            auto_errors.append(r)
+    
+    # Выводим автоматические ошибки
+    if auto_errors:
+        for err in auto_errors:
+            st.write(f"• {err}")
     else:
-        for r in results:
-            if r.startswith("📋"):
-                st.markdown(f"**{r}**")
-            else:
-                st.write(f"• {r}")
-        
-        # Если ошибок нет, но есть секция "Для проверки человеком"
-        if len(real_issues) == 0 and len(manual_section) > 0:
-            st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
+        st.success("✅ Автоматических ошибок не найдено.")
+    
+    # ВСЕГДА выводим блок для человека (3 обязательных пункта)
+    st.markdown("---")
+    st.markdown("### 📋 Экспертная проверка (ОБЯЗАТЕЛЬНО):")
+    st.markdown("📌 **ПРОВЕРЬТЕ ВРУЧНУЮ**: титульный лист, задание, содержание, введение (первые 4 страницы) на соответствие шаблону.")
+    st.markdown("⚠️ **ВНИМАНИЕ**: Проверьте вручную наличие надписей «Продолжение таблицы» / «Окончание таблицы» на каждой странице разрыва.")
+    st.markdown("⚠️ **ВНИМАНИЕ**: Проверьте правильность переноса рисунков на новую страницу и их подписей.")
+    
+    # Если есть дополнительные замечания из manual_items (от кода), выводим их
+    if manual_items:
+        st.markdown("#### Дополнительные замечания:")
+        for item in manual_items:
+            if item.strip():
+                st.write(f"• {item}")
+    
+    # Финальное сообщение
+    st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
