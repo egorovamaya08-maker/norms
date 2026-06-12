@@ -85,7 +85,9 @@ def is_paragraph_bold(paragraph):
     return False
 
 def is_empty_paragraph(paragraph):
-    return len(paragraph.text.strip()) == 0
+    # Извлекаем вообще весь текст из XML-элемента абзаца, включая текст внутри w:hyperlink
+    full_text = "".join(node.text or "" for node in paragraph._element.iter(qn('w:t'))).strip()
+    return len(full_text) == 0
 
 def has_page_number(text):
     return bool(re.search(r'[\t\s\.]{2,}\d+$', text))
@@ -1073,7 +1075,8 @@ def check_word_document(file):
 
     for idx in range(start_idx, end_idx):
         p = doc.paragraphs[idx]
-        text = p.text.strip()
+        # Читаем текст напрямую из XML, чтобы не потерять заголовки-ссылки
+        text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
         norm_text = normalize_text(text)
 
         if not text:
@@ -1246,13 +1249,16 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
            # --- ИСПРАВЛЕНИЕ ЛОЖНОГО СРАБАТЫВАНИЯ ДЛЯ ВВЕДЕНИЯ ---
+          
             has_empty_after = False
             
             # 1. Проверяем, есть ли физическая пустая строка после заголовка
-            if idx + 1 < len(doc.paragraphs) and is_empty_paragraph(doc.paragraphs[idx + 1]): 
-                has_empty_after = True
+            if idx + 1 < len(doc.paragraphs):
+                next_p = doc.paragraphs[idx + 1]
+                if is_empty_paragraph(next_p):
+                    has_empty_after = True
                 
-            # 2. Проверяем локальный интервал после абзаца
+            # 2. Проверяем локальный интервал после абзаца (в твоем документе у Введения стоит ровно 12 pt)
             if p.paragraph_format.space_after and p.paragraph_format.space_after.pt >= 11.5:
                 has_empty_after = True
                 
