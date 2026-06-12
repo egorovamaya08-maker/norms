@@ -1250,29 +1250,52 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
            # --- ИСПРАВЛЕНИЕ ЛОЖНОГО СРАБАТЫВАНИЯ ДЛЯ ВВЕДЕНИЯ ---
           
+            # --- ИСПРАВЛЕНИЕ: ГЛУБОКАЯ ПРОВЕРКА ОТСТУПА ПОСЛЕ ЗАГОЛОВКА ---
             has_empty_after = False
             
-            # 1. Проверяем, есть ли физическая пустая строка после заголовка
+            # 1. Проверка следующего абзаца на пустоту
             if idx + 1 < len(doc.paragraphs):
                 next_p = doc.paragraphs[idx + 1]
-                if is_empty_paragraph(next_p):
+                if len(next_p.text.strip()) == 0:
                     has_empty_after = True
                 
-            # 2. Проверяем локальный интервал после абзаца (в твоем документе у Введения стоит ровно 12 pt)
-            if p.paragraph_format.space_after and p.paragraph_format.space_after.pt >= 11.5:
-                has_empty_after = True
-                
-            # 3. Проверяем интервал, зашитый внутри стиля самого заголовка
+                # 2. Проверка интервала ПЕРЕД следующим абзацем текста
+                try:
+                    if next_p.paragraph_format.space_before and next_p.paragraph_format.space_before.pt >= 11.5:
+                        has_empty_after = True
+                    pPr_next = next_p._element.find(qn('w:pPr'))
+                    if pPr_next is not None:
+                        sp_next = pPr_next.find(qn('w:spacing'))
+                        if sp_next is not None and sp_next.get(qn('w:before')) and int(sp_next.get(qn('w:before'))) >= 230:
+                            has_empty_after = True
+                except:
+                    pass
+
+            # 3. Проверка интервала ПОСЛЕ заголовка (стандартный метод python-docx)
             try:
+                if p.paragraph_format.space_after and p.paragraph_format.space_after.pt >= 11.5:
+                    has_empty_after = True
                 if p.style and p.style.paragraph_format.space_after and p.style.paragraph_format.space_after.pt >= 11.5:
                     has_empty_after = True
             except:
                 pass
                 
-            # Если ни один из вариантов отступа не найден, выдаем ошибку
+            # 4. Жесткая проверка интервала напрямую через XML (для строгих шаблонов Word)
+            try:
+                pPr = p._element.find(qn('w:pPr'))
+                if pPr is not None:
+                    spacing = pPr.find(qn('w:spacing'))
+                    if spacing is not None:
+                        after = spacing.get(qn('w:after'))
+                        # 240 twips = 12 pt. Берем >= 230 на случай микроскопических округлений Word
+                        if after and int(after) >= 230:  
+                            has_empty_after = True
+            except:
+                pass
+
             if not has_empty_after:
-                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или задайте интервал после 12 pt)")
-            # -----------------------------------------------------
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+            # -------------------------------------------------------------
 
 
             
