@@ -538,7 +538,7 @@ def group_issues(issues_list):
             manual_section = True
             continue
         if manual_section:
-            manual_issues.append(issue)
+            manual_checks.append(issue)
         else:
             auto_issues.append(issue)
 
@@ -1037,6 +1037,7 @@ def check_word_document(file):
     doc = docx.Document(file)
     auto_issues = []
     manual_checks = []
+    manual_issues = manual_checks
 
     # --- ПОЛЯ ---
     margins_ok = True
