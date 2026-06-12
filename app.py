@@ -20,6 +20,45 @@ TABLE_CONTINUATION_RE = re.compile(
 # ------------------------------------------------------------
 # Нормализация текста: удаление невидимок, замена пробелов
 # ------------------------------------------------------------
+
+def iter_block_items(parent):
+    """
+    Генератор, который обходит документ и возвращает параграфы и таблицы
+    в порядке их следования (для проверки таблиц и пустых строк вокруг них).
+    """
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+    from docx.table import Table
+
+    for child in parent.element.body:
+        if child.tag == qn('w:p'):
+            yield Paragraph(child, parent)
+        elif child.tag == qn('w:tbl'):
+            yield Table(child, parent)
+
+def iter_block_items(parent):
+    """
+    Последовательно обходит абзацы и таблицы в документе 
+    в том порядке, в котором они реально идут в файле.
+    """
+    from docx.document import Document
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    if isinstance(parent, Document):
+        parent_elm = parent.element.body
+    else:
+        parent_elm = parent._element
+
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+
 def normalize_text(text):
     if not text:
         return text
@@ -1426,215 +1465,68 @@ def check_word_document(file):
 
     # --- ТАБЛИЦЫ ---
        # --- ТАБЛИЦЫ ---
-    end_body_pos = len(body_elems)
-    if lit_start is not None:
-        try:
-            lit_element = doc.paragraphs[lit_start]._element
-            end_body_pos = body_elems.index(lit_element)
-        except:
-            pass
+        # --- НОВАЯ ПРОВЕРКА ТАБЛИЦ (расположение названия и пустая строка после) ---
+    # Определяем регулярное выражение для названия таблицы
+    table_title_re = re.compile(r'^таблица\s+\d+', re.IGNORECASE)
+    TABLE_CONTINUATION_RE = re.compile(r'^(продолжение|окончание)\s+таблицы', re.IGNORECASE)
 
-    tables_in_range = []
-    for table in doc.tables:
-        if get_table_depth(table) > 0:
-            continue
-        try:
-            tbl_pos = body_elems.index(table._element)
-        except:
-            continue
-        if not (start_body_pos < tbl_pos < end_body_pos):
-            continue
-        if len(table.rows) == 0:
-            continue
-        tables_in_range.append((tbl_pos, table))
+    # Получаем плоский список элементов (параграфы и таблицы) в порядке следования
+    try:
+        elements = list(iter_block_items(doc))
+    except Exception as e:
+        # Если функция iter_block_items не определена (защита от ошибки)
+        manual_checks.append(f"Ошибка при обходе элементов документа: {e}")
+        elements = []
 
-    # Сортируем таблицы по позиции в документе
-    tables_in_range.sort(key=lambda x: x[0])
-    
-    # Заново собираем подписи таблиц с ТОЧНЫМИ body_idx
-    table_captions_info = []
-    for idx in range(start_idx, end_idx):
-        p = doc.paragraphs[idx]
-        text = p.text.strip()
-        if not text:
-            continue
-        if has_page_number(text):
-            continue
-        if re.match(r'^Таблица\s+\d+(?:\.\d+)?\s*[–—\-\.]\s*\S', text) and not is_table_continuation(text):
-      
-            tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text)
-            if tbl_match:
-                tbl_num = tbl_match.group(1)
-                tbl_num_float = float(tbl_num)
-                table_numbers_found.append(tbl_num_float)
-                key = f"Таблица {tbl_num}"
-                
-                # Находим точный body_idx через элемент абзаца
-                try:
-                    body_idx = body_elems.index(p._element)
-                except:
-                    body_idx = None
-                
-                table_captions_info.append({
-                    'para_idx': idx,
-                    'body_idx': body_idx,
-                    'number': tbl_num_float,
-                    'number_str': tbl_num,
-                    'text': text,
-                    'key': key
-                })
-
-    table_issues = []
-    used_captions = set()
-
-    for tbl_pos, table in tables_in_range:
-        caption_info = None
-        
-        # Ищем ближайшую НЕиспользованную подпись ПЕРЕД таблицей
-        best_cap = None
-        best_distance = float('inf')
-        
-        for i, cap in enumerate(table_captions_info):
-            if i in used_captions:
-                continue
-            if cap['body_idx'] is not None and cap['body_idx'] < tbl_pos:
-                distance = tbl_pos - cap['body_idx']
-                if distance < best_distance:
-                    # Проверяем, что между подписью и таблицей нет других таблиц
-                    other_tables_between = any(
-                        other_pos < tbl_pos and other_pos > cap['body_idx']
-                        for other_pos, _ in tables_in_range
-                    )
-                    if not other_tables_between:
-                        best_distance = distance
-                        best_cap = (i, cap)
-        
-        if best_cap is not None:
-            i, caption_info = best_cap
-            used_captions.add(i)
-        
-        if caption_info:
-            key = caption_info['key']
-            tbl_num = caption_info['number_str']
-
-            # Проверка пустых строк вокруг названия таблицы
-            if caption_info['body_idx'] is not None:
-                empty_errors = check_empty_line_before_after(doc, caption_info['body_idx'], start_body_pos, key)
-                table_issues.extend(empty_errors)
-
-            # Проверка на полужирный шрифт внутри таблицы
-            bold_in_table = False
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        for run in para.runs:
-                            if run.bold:
-                                bold_in_table = True
-                                break
-                        if bold_in_table: break
-                    if bold_in_table: break
-                if bold_in_table: break
-            if bold_in_table:
-                table_issues.append(f"{key} – уберите полужирное начертание внутри таблицы")
-
-            # Проверка продолжения таблицы
-            if len(table.rows) > 2:
-                current_tbl_index = None
-                for i, (pos, _) in enumerate(tables_in_range):
-                    if pos == tbl_pos:
-                        current_tbl_index = i
-                        break
-                if current_tbl_index is not None and current_tbl_index + 1 < len(tables_in_range):
-                    next_tbl_pos = tables_in_range[current_tbl_index + 1][0]
-                else:
-                    next_tbl_pos = end_body_pos
-                
-                markers_found = False
-                for i in range(tbl_pos + 1, next_tbl_pos):
-                    if i < len(body_elems):
-                        if body_elems[i].tag == qn('w:p'):
-                            txt = ''.join(node.text or '' for node in body_elems[i].iter() if node.tag == qn('w:t')).strip()
-                            if txt and re.search(r'(?:Продолжение|Окончание)\s+таблицы?\s*' + re.escape(tbl_num), txt):
-                                markers_found = True
-                                break
-                if not markers_found:
-                    manual_checks.append(f"{key} – проверьте наличие «Продолжение таблицы {tbl_num}» / «Окончание таблицы {tbl_num}» при переносе на следующую страницу")
-
-        else:
-            # Название не найдено перед таблицей - анализируем элементы строго вверх
+    for idx, item in enumerate(elements):
+        # Если текущий элемент — ТАБЛИЦА
+        if isinstance(item, docx.table.Table):
+            # --- 1. Проверяем расположение названия (должно быть ПЕРЕД таблицей) ---
+            has_title_before = False
             prev_text = ""
-            has_continuation_marker = False
-            
-            check_limit = max(start_body_pos - 1, tbl_pos - 5)
-            for i in range(tbl_pos - 1, check_limit, -1):
-                elem = body_elems[i]
-                if elem.tag == qn('w:p'):
-                    txt = ''.join(node.text or '' for node in elem.iter() if node.tag == qn('w:t')).strip()
-                    
-                    if txt and (("продолжение" in txt.lower()) or ("окончание" in txt.lower())):
-                        prev_text = txt
-                        has_continuation_marker = True
-                        break
-                    
-                    if txt and not prev_text:
-                        prev_text = txt
-                        
-                elif elem.tag == qn('w:tbl'):
-                    break
+            if idx > 0 and isinstance(elements[idx - 1], docx.text.paragraph.Paragraph):
+                prev_text = normalize_text(elements[idx - 1].text)
+                if table_title_re.match(prev_text):
+                    has_title_before = True
 
-            if has_continuation_marker or is_table_continuation(prev_text):
-                pass
-            else:
-                if prev_text:
-                    diag_text = prev_text[:50]
-                    table_issues.append(
-                        f"Таблица (после абзаца «{diag_text}…») – добавьте название перед таблицей"
-                    )
-                else:
-                    table_issues.append("Таблица – добавьте название перед таблицей")
-                        
+            has_title_after = False
+            next_text = ""
+            if idx + 1 < len(elements) and isinstance(elements[idx + 1], docx.text.paragraph.Paragraph):
+                next_text = normalize_text(elements[idx + 1].text)
+                if table_title_re.match(next_text):
+                    has_title_after = True
 
-    # --- АНАЛИЗ ВЗАИМНОГО РАСПОЛОЖЕНИЯ ТАБЛИЦ И ПОДПИСЕЙ ---
-    # Дополнительная проверка: ищем подписи, которые идут ПОСЛЕ таблицы
-    for idx, elem in enumerate(body_elems):
-        # Если текущий элемент является таблицей
-        if elem.tag == qn('w:tbl'):
-            # Пропускаем вложенные таблицы
-            if get_table_depth(docx.table.Table(elem, doc)) > 0:
-                continue
-                
-            # Проверяем, что таблица находится в проверяемом диапазоне
-            if not (start_body_pos < idx < end_body_pos):
-                continue
-            
-            # Ищем подпись к этой таблице в ближайших элементах ниже (поиск на 2-3 элемента вперед)
-            caption_found_after = False
-            for look_ahead in range(1, 4):
-                if idx + look_ahead >= len(body_elems):
-                    break
-                
-                next_elem = body_elems[idx + look_ahead]
-                if next_elem.tag == qn('w:p'):
-                    # Получаем текст абзаца
-                    text = ''.join(node.text or '' for node in next_elem.iter() if node.tag == qn('w:t')).strip()
-                    
-                    # Проверяем, содержит ли текст формат подписи таблицы
-                    if re.match(r'^Таблица\s+\d+', text, re.IGNORECASE):
-                        table_num_match = re.search(r'\d+', text)
-                        table_label = f"Таблица {table_num_match.group(0)}" if table_num_match else "Таблица"
-                        
-                        # Проверяем, не является ли это продолжением таблицы
-                        if not is_table_continuation(text):
-                            # Добавляем критический комментарий о неверном расположении
-                            table_issues.append(f"{table_label} – название должно быть ПЕРЕД таблицей (сейчас расположено после)")
-                            caption_found_after = True
-                        break
-                elif next_elem.tag == qn('w:tbl'):
-                    # Если встретили следующую таблицу, прекращаем поиск подписи для текущей
-                    break
+            # Извлекаем номер таблицы для сообщений
+            table_num_match = re.search(r'\d+', prev_text if has_title_before else (next_text if has_title_after else ""))
+            table_num = table_num_match.group(0) if table_num_match else "?"
 
-    auto_issues.extend(table_seq_issues)
-    auto_issues.extend(table_issues)
+            if has_title_after and not has_title_before:
+                auto_issues.append(f"Таблица {table_num} – название должно быть ПЕРЕД таблицей (сейчас расположено после)")
+            elif not has_title_before and not has_title_after:
+                # Название не найдено – помечаем для ручной проверки
+                manual_checks.append(f"📋 Таблица (№ {table_num} по счёту) – не обнаружено стандартное название формата 'Таблица X'. Проверьте вручную.")
+
+            # --- 2. Проверяем, есть ли пустая строка ПОСЛЕ таблицы (перед следующим текстом) ---
+            # Сдвигаем индекс, чтобы пропустить возможное название, если оно ошибочно идёт после таблицы
+            check_idx = idx + 2 if has_title_after else idx + 1
+
+            if check_idx < len(elements):
+                next_item = elements[check_idx]
+                if isinstance(next_item, docx.text.paragraph.Paragraph):
+                    next_item_text = normalize_text(next_item.text)
+                    # Если следующий абзац не пустой и не является "Продолжение таблицы"
+                    if next_item_text and not TABLE_CONTINUATION_RE.match(next_item_text):
+                        short_next = (next_item_text[:40] + "...") if len(next_item_text) > 40 else next_item_text
+                        manual_checks.append(
+                            f"📋 После таблицы {table_num} отсутствует пустая строка перед текстом «{short_next}»."
+                        )
+
+    # Проверка нумерации таблиц (оставляем старую логику, если нужна)
+    if table_numbers_found:
+        int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
+        if int_tbl_nums:
+            if int_tbl_nums[0] != 1 or any(expected not in int_tbl_nums for expected in range(1, int_tbl_nums[-1] + 1)):
+                auto_issues.append("Таблицы – неверная нумерация")
 
     # --- СПИСОК ИСТОЧНИКОВ ---
     if lit_start is not None:
