@@ -1158,6 +1158,7 @@ def check_word_document(file):
         # Читаем текст напрямую из XML, чтобы не потерять заголовки-ссылки
         text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
         norm_text = normalize_text(text)
+        style_name = p.style.name.lower() if p.style else ""
 
         if not text:
             prev_para_empty = True
@@ -1171,93 +1172,70 @@ def check_word_document(file):
             prev_para_empty = False
             continue
 
-        is_level1 = is_section_header(norm_text)
+        # --- ОПРЕДЕЛЕНИЕ ЗАГОЛОВКОВ 1 УРОВНЯ ---
+        is_level1 = False
+        if 'heading 1' in style_name or 'заголовок 1' in style_name:
+            is_level1 = True
+        elif text.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+            is_level1 = True
+        elif re.match(r'^[1-9]\d*\s+[А-ЯA-Z]', text):
+            is_level1 = True
+        elif is_section_header(norm_text):
+            is_level1 = True
+
+        # --- ОПРЕДЕЛЕНИЕ ПОДЗАГОЛОВКОВ (1.1, 1.2, 1.1.1) ---
         is_subsection = False
         if 'heading 2' in style_name or 'заголовок 2' in style_name or 'heading 3' in style_name or 'заголовок 3' in style_name:
             is_subsection = True
-        elif re.match(r'^\d+(\.\d+)+\.?\s+', text):  # ФИКС: ловит "1.1. " и "1.1 "
+        elif re.match(r'^\d+(\.\d+)+\.?\s+', text):
             is_subsection = True
 
-# Для подзаголовков: проверяем, что после нет пустой строки
-        if is_subsection:
-            sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
-            key = f"Подраздел «{sub_name[:50]}»"
-            first_line = get_effective_first_line_indent(p)
-            
-            # --- Ваши стандартные проверки (сохраняем) ---
-            if abs(first_line - 1.0) > 0.2:
-                auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
-            if not is_paragraph_bold(p):
-                auto_issues.append(f"{key} – заголовок должен быть полужирным")
-            if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.JUSTIFY:
-                auto_issues.append(f"{key} – выровняйте по ширине")
-            if text.endswith("."):
-                auto_issues.append(f"{key} – удалите точку в конце")
-                
-            # Проверяем, что было выше заголовка
-            section_header_above = False
-            for k in range(idx - 1, -1, -1):
-                p_text = doc.paragraphs[k].text.strip()
-                if p_text:
-                    if is_section_header(p_text):
-                        section_header_above = True
-                    break
+        # Для подзаголовков: проверяем, что после нет пустой строки
+        if is_subsection and idx + 1 < len(doc.paragraphs):
+            next_p = doc.paragraphs[idx + 1]
+            if is_empty_paragraph(next_p):
+                auto_issues.append(f"Подраздел «{text[:50]}» – после подзаголовка не должно быть пустой строки")
 
-            # ============================================================
-            # НОВЫЙ ИСПРАВЛЕННЫЙ БЛОК ПРОВЕРКИ ПУСТОЙ СТРОКИ ПЕРЕД ПОДРАЗДЕЛОМ
-            # ============================================================
-            if idx > 0:
-                prev_p = doc.paragraphs[idx - 1]
-                prev_txt = prev_p.text.strip()
-                
-                # Если перед подразделом НЕТ пустой строки, начинаем разбираться
-                if prev_txt != "":
-                    # Получаем индекс элемента в XML для функции проверки страниц
-                    try:
-                        body_elems_local = list(doc.element.body)
-                        body_idx = body_elems_local.index(p._element)
-                    except:
-                        body_idx = -1
-                    
-                    # 1. Если это естественный перенос на новую страницу — игнорируем отсутствие строки
-                    if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
-                        pass 
-                    
-                    # 2. Если прямо перед ним идет другой заголовок — это явная автоматическая ошибка
-                    elif is_section_header(prev_txt) or re.match(r'^\d+\.\d+', prev_txt):
-                        auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
-                    
-                    # 3. Если перед ним обычный текст — отправляем на ручную проверку на случай скрытого переноса
+        # Флаги для предудущих состояний
+        if is_level1 or is_subsection:
+            if is_level1:
+                prev_was_section_header = True
+                prev_was_subsection = False
+            else:
+                prev_was_subsection = True
+                prev_was_section_header = False
+        else:
+            prev_was_section_header = False
+            prev_was_subsection = False
+
+        # --- ЛОГИКА ДЛЯ НЕ-ЗАГОЛОВКОВ (списки, формулы, рисунки, основной текст) ---
+        if not is_level1 and not is_subsection:
+            # Проверка списков
+            is_list, marker_type, marker_valid = get_list_marker_info(p, doc)
+            if is_list:
+                if not marker_valid:
+                    if list_errors and idx == list_errors[-1][0] + 1:
+                        list_errors.append((idx, text, marker_type))
                     else:
-                        manual_issues.append(
-                            f"{key} – проверьте визуально: если он естественно перенесся на новую страницу, то отступ перед ним не нужен. "
-                            f"Если он идет внутри страницы, добавьте пустую строку."
-                        )
-            # ============================================================
-        
-        if text:
-            prev_para_empty = False
-            prev_was_formula = False
-        else:
-            prev_para_empty = True
+                        if list_errors:
+                            first_text = list_errors[0][1]
+                            auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                            list_errors = []
+                        list_errors.append((idx, text, marker_type))
+                else:
+                    if list_errors:
+                        first_text = list_errors[0][1]
+                        auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
+                        list_errors = []
+                prev_para_empty = False
+                continue
 
-    # --- ЗАВЕРШАЮЩИЕ ПРОВЕРКИ ---
-    if indent_issues:
-        if len(indent_issues) > 2:
-            first_key, first_indent = indent_issues[0]
-            auto_issues.append(
-                f"Основной текст, начиная со строки «{first_key}» – "
-                f"установите абзацный отступ 1,0 см (сейчас {first_indent:.1f} см)"
-            )
-        else:
-            for key, fl in indent_issues:
-                auto_issues.append(f"«{key}» – установите абзацный отступ 1,0 см (сейчас {fl:.1f} см)")
-
-    if list_errors:
+            if list_errors:
                 first_text = list_errors[0][1]
                 auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
                 list_errors = []
 
+            # Продолжение таблицы
             if is_table_continuation(norm_text):
                 first_line = get_effective_first_line_indent(p)
                 if abs(first_line) > 0.1:
@@ -1265,12 +1243,14 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
+            # Пояснение к формуле
             if is_formula_where_line(norm_text):
                 errors = check_formula_explanation(text, p, prev_was_formula, prev_para_empty)
                 auto_issues.extend(errors)
                 prev_para_empty = False
                 continue
 
+            # Формула
             if is_formula_or_equation(norm_text):
                 prev_was_formula = True
                 prev_para_empty = False
@@ -1292,13 +1272,6 @@ def check_word_document(file):
 
                 if norm_text.startswith("Рис."):
                     auto_issues.append(f"{fig_number} – измените «Рис.» на «Рисунок»")
-            #    if re.match(r'Рисунок\s*:', norm_text):
-            #        auto_issues.append(f"{fig_number} – замените двоеточие на тире (формат: «Рисунок N — Название»)")
-            #    if not re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[–—]', norm_text) and not re.match(r'Рисунок\s*:', norm_text):
-           #         if re.search(r'Рисунок\s+\d+(?:\.\d+)?\s*[-]', norm_text):
-            #            auto_issues.append(f"{fig_number} – замените дефис на тире (—)")
-            #        else:
-            #            auto_issues.append(f"{fig_number} – должно быть тире после номера")
                 if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.CENTER:
                     auto_issues.append(f"{fig_number} – выровняйте подпись по центру")
                 if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
@@ -1321,6 +1294,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
+            # Подпись таблицы
             elif is_table_caption and not is_table_continuation(norm_text):
                 tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
                 if tbl_match:
@@ -1340,7 +1314,7 @@ def check_word_document(file):
                 prev_para_empty = False
                 continue
 
-            # Основной текст (не заголовок, не список, не формула, не подпись)
+            # Основной текст
             key = norm_text[:50]
             first_line = get_effective_first_line_indent(p)
             if abs(first_line - 1.0) > 0.2:
@@ -1348,7 +1322,7 @@ def check_word_document(file):
             if p.paragraph_format.space_before and p.paragraph_format.space_before.pt > 0.5:
                 auto_issues.append(f"«{key}» – интервал перед абзацем должен быть 0 пт")
 
-        # === Проверка заголовков ===
+        # === Проверка заголовков 1 уровня ===
         if is_level1:
             key = text[:80]
             if text.upper() != "ВВЕДЕНИЕ":
@@ -1368,22 +1342,17 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
 
             if not has_proper_spacing_after_header(doc, idx):
-                auto_issues.append(
-                    f"«{key}» – после заголовка должна быть пустая строка "
-                    f"(или интервал после ≥ 12 pt)")
-        
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
 
-
-            
             if text.upper() == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
                 auto_issues.append(f"«{text[:50]}» – замените на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
 
+        # === Проверка подзаголовков ===
         elif is_subsection:
             sub_name = re.sub(r'^\d+\.\d+(\.\d+)?\s*', '', norm_text).strip()
             key = f"Подраздел «{sub_name[:50]}»"
             first_line = get_effective_first_line_indent(p)
-            
-            # --- Ваши стандартные проверки (сохраняем) ---
+
             if abs(first_line - 1.0) > 0.2:
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
             if not is_paragraph_bold(p):
@@ -1392,48 +1361,28 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-                
-            # Проверяем, что было выше заголовка
-            section_header_above = False
-            for k in range(idx - 1, -1, -1):
-                p_text = doc.paragraphs[k].text.strip()
-                if p_text:
-                    if is_section_header(p_text):
-                        section_header_above = True
-                    break
 
-            # ============================================================
-            # НОВЫЙ ИСПРАВЛЕННЫЙ БЛОК ПРОВЕРКИ ПУСТОЙ СТРОКИ ПЕРЕД ПОДРАЗДЕЛОМ
-            # ============================================================
+            # Проверка пустой строки перед подразделом
             if idx > 0:
                 prev_p = doc.paragraphs[idx - 1]
                 prev_txt = prev_p.text.strip()
-                
-                # Если перед подразделом НЕТ пустой строки, начинаем разбираться
                 if prev_txt != "":
-                    # Получаем индекс элемента в XML для функции проверки страниц
                     try:
-                        body_elems = list(doc.element.body)
-                        body_idx = body_elems.index(p._element)
+                        body_elems_local = list(doc.element.body)
+                        body_idx = body_elems_local.index(p._element)
                     except:
                         body_idx = -1
-                    
-                    # 1. Если это естественный перенос на новую страницу — игнорируем отсутствие строки
                     if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
-                        pass 
-                    
-                    
-                    # 2. Если прямо перед ним идет другой заголовок — это явная автоматическая ошибка
+                        pass
                     elif is_section_header(prev_txt) or re.match(r'^\d+\.\d+', prev_txt):
                         auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
-                    
-                    # 3. Если перед ним обычный текст — отправляем на ручную проверку на случай скрытого переноса
                     else:
                         manual_issues.append(
                             f"{key} – проверьте визуально: если он естественно перенесся на новую страницу, то отступ перед ним не нужен. "
                             f"Если он идет внутри страницы, добавьте пустую строку."
                         )
-            # ============================================================
+
+        # Сброс флагов для следующей итерации
         if text:
             prev_para_empty = False
             prev_was_formula = False
