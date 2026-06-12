@@ -1350,6 +1350,11 @@ def check_word_document(file):
                     empty_errors = check_empty_line_before_after(doc, body_idx, start_body_pos, fig_number)
                     auto_issues.extend(empty_errors)
                 prev_para_empty = False
+                first_line = get_effective_first_line_indent(p)
+                if abs(first_line) > 0.1:
+                    auto_issues.append(f"{fig_number} – уберите абзацный отступ (должен быть 0 см, сейчас {first_line:.1f} см)")
+
+                
                 continue
 
             # Подпись таблицы
@@ -1575,13 +1580,25 @@ def check_word_document(file):
                 "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
             )
 
-        # Добавляем глобальные напоминания для человека
-    manual_checks.append("⚠️ ВНИМАНИЕ: Проверьте вручную наличие надписей «Продолжение таблицы» или «Окончание таблицы» на каждой странице, где таблица разрывается.")
-    manual_checks.append("⚠️ ВНИМАНИЕ: Проверьте правильность переноса рисунков на новую страницу и их подписей.")
-    all_issues = auto_issues
+    # --- ОБЪЕДИНЯЕМ ВСЕ РУЧНЫЕ ПРОВЕРКИ ---
+    # manual_issues (из подзаголовков) и manual_checks (из таблиц/рисунков)
+    all_manual = []
+    if manual_issues:
+        all_manual.extend(manual_issues)
     if manual_checks:
+        all_manual.extend(manual_checks)
+    
+    # Добавляем глобальные напоминания
+    all_manual.append("📌 ПРОВЕРЬТЕ ВРУЧНУЮ: титульный лист, задание, содержание, введение (первые 4 страницы) на соответствие шаблону.")
+    all_manual.append("⚠️ ВНИМАНИЕ: Проверьте вручную наличие надписей «Продолжение таблицы» или «Окончание таблицы» на каждой странице, где таблица разрывается.")
+    all_manual.append("⚠️ ВНИМАНИЕ: Проверьте правильность переноса рисунков на новую страницу и их подписей.")
+    
+    # Формируем итоговый список
+    all_issues = auto_issues
+    if all_manual:
         all_issues.append("📋 Для проверки человеком:")
-        all_issues.extend(manual_checks)
+        all_issues.extend(all_manual)
+    
     return group_issues(all_issues)
 
 # --- ИНТЕРФЕЙС STREAMLIT ---
@@ -1595,13 +1612,6 @@ if uploaded_file is not None:
         results = check_word_document(uploaded_file)
     st.subheader("Результаты проверки:")
 
-    for r in results:
-        # Если это заголовок секции с комментариями, выделим его
-        if "📋" in r or "⚠️" in r:
-            st.markdown(f"---")
-            st.markdown(f"**{r}**")
-        else:
-            st.write(r)
     
     # Проверяем, есть ли реальные ошибки (исключая informational messages)
     real_issues = [r for r in results if not r.startswith("📋") and not r.startswith("❌ Отсутствует введение")]
