@@ -958,53 +958,68 @@ def has_content(elem):
     return False
 
 def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
-    """Улучшенная проверка отступа после заголовка 1 уровня"""
+    """Надёжная проверка отступа после заголовка 1 уровня"""
     if header_idx + 1 >= len(doc.paragraphs):
         return False
 
-    # Проверяем до 3 следующих абзацев
-    for i in range(header_idx + 1, min(header_idx + 4, len(doc.paragraphs))):
-        next_p = doc.paragraphs[i]
+    curr_p = doc.paragraphs[header_idx]
+    next_p = doc.paragraphs[header_idx + 1]
 
-        # 1. Пустой абзац
-        if is_empty_paragraph(next_p):
-            return True
+    # 1. Пустой абзац (самый надёжный признак)
+    if is_empty_paragraph(next_p):
+        return True
 
-        # 2. Интервал перед следующим абзацем
-        try:
-            if next_p.paragraph_format.space_before and next_p.paragraph_format.space_before.pt >= 10:
-                return True
-            if (next_p.style and next_p.style.paragraph_format.space_before and 
-                next_p.style.paragraph_format.space_before.pt >= 10):
-                return True
-        except:
-            pass
-
-        # 3. XML-проверка (самый надёжный)
-        try:
-            pPr = next_p._element.find(qn('w:pPr'))
-            if pPr is not None:
-                spacing = pPr.find(qn('w:spacing'))
-                if spacing is not None:
-                    before = spacing.get(qn('w:before'))
-                    if before and int(before) >= 200:   # ≈10–12 pt
-                        return True
-        except:
-            pass
-
-    # Проверяем интервал после самого заголовка
+    # 2. Проверка интервала перед следующим абзацем
     try:
-        curr_p = doc.paragraphs[header_idx]
-        if curr_p.paragraph_format.space_after and curr_p.paragraph_format.space_after.pt >= 12:
+        if next_p.paragraph_format.space_before and next_p.paragraph_format.space_before.pt >= 8:
             return True
-        if (curr_p.style and curr_p.style.paragraph_format.space_after and 
-            curr_p.style.paragraph_format.space_after.pt >= 12):
+        if (next_p.style and next_p.style.paragraph_format.space_before and 
+            next_p.style.paragraph_format.space_before.pt >= 8):
             return True
     except:
         pass
 
+    # 3. Проверка интервала после самого заголовка
+    try:
+        if curr_p.paragraph_format.space_after and curr_p.paragraph_format.space_after.pt >= 8:
+            return True
+        if (curr_p.style and curr_p.style.paragraph_format.space_after and 
+            curr_p.style.paragraph_format.space_after.pt >= 8):
+            return True
+    except:
+        pass
+
+    # 4. Глубокая XML-проверка (самый важный блок)
+    try:
+        # Проверяем следующий абзац
+        pPr = next_p._element.find(qn('w:pPr'))
+        if pPr is not None:
+            spacing = pPr.find(qn('w:spacing'))
+            if spacing is not None:
+                before = spacing.get(qn('w:before'))
+                if before and int(before) >= 160:   # ≈8-12 pt
+                    return True
+    except:
+        pass
+
+    try:
+        # Проверяем текущий заголовок
+        pPr = curr_p._element.find(qn('w:pPr'))
+        if pPr is not None:
+            spacing = pPr.find(qn('w:spacing'))
+            if spacing is not None:
+                after = spacing.get(qn('w:after'))
+                if after and int(after) >= 160:
+                    return True
+    except:
+        pass
+
+    # 5. Проверяем 1-2 следующих абзаца
+    for i in range(header_idx + 1, min(header_idx + 5, len(doc.paragraphs))):
+        if is_empty_paragraph(doc.paragraphs[i]):
+            return True
+
     return False
-    
 # ------------------------------------------------------------
 # Главная проверка документа
 # ------------------------------------------------------------
