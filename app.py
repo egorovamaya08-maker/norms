@@ -1198,6 +1198,8 @@ def check_word_document(file):
         # Читаем текст напрямую из XML, чтобы не потерять заголовки-ссылки
         text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
         norm_text = normalize_text(text)
+        if len(norm_text) < 5 or re.match(r'^[,.\(\)\d\s]+$', norm_text):
+            continue
         style_name = p.style.name.lower() if p.style else ""
 
         if not text:
@@ -1511,15 +1513,21 @@ def check_word_document(file):
             check_idx = idx + 2 if has_title_after else idx + 1
 
             if check_idx < len(elements):
+               # --- ИСПРАВЛЕННЫЙ БЛОК ---
+            if check_idx < len(elements):
                 next_item = elements[check_idx]
                 if isinstance(next_item, docx.text.paragraph.Paragraph):
-                    next_item_text = normalize_text(next_item.text)
-                    # Если следующий абзац не пустой и не является "Продолжение таблицы"
-                    if next_item_text and not TABLE_CONTINUATION_RE.match(next_item_text):
-                        short_next = (next_item_text[:40] + "...") if len(next_item_text) > 40 else next_item_text
+                    raw_text = next_item.text.strip()
+        # Проверяем: если текст пуст ИЛИ это просто набор пробелов/невидимок (len < 2)
+        # Мы считаем такой абзац "пустой строкой" (правильно)
+                    is_actually_empty = len(raw_text) < 2
+        
+        # Если абзац НЕ пустой И НЕ является "Продолжение таблицы"
+                    if not is_actually_empty and not TABLE_CONTINUATION_RE.match(raw_text):
+                        short_next = (raw_text[:40] + "...") if len(raw_text) > 40 else raw_text
                         manual_checks.append(
                             f"📋 После таблицы {table_num} отсутствует пустая строка перед текстом «{short_next}»."
-                        )
+            )
 
     # Проверка нумерации таблиц (оставляем старую логику, если нужна)
     if table_numbers_found:
@@ -1552,6 +1560,9 @@ def check_word_document(file):
                 "междустрочный интервал 1,2 (множитель), выравнивание по ширине"
             )
 
+        # Добавляем глобальные напоминания для человека
+    manual_checks.append("⚠️ ВНИМАНИЕ: Проверьте вручную наличие надписей «Продолжение таблицы» или «Окончание таблицы» на каждой странице, где таблица разрывается.")
+    manual_checks.append("⚠️ ВНИМАНИЕ: Проверьте правильность переноса рисунков на новую страницу и их подписей.")
     all_issues = auto_issues
     if manual_checks:
         all_issues.append("📋 Для проверки человеком:")
