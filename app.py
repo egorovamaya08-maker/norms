@@ -531,6 +531,7 @@ def get_category_order(issue):
 def group_issues(issues_list):
     auto_issues = []
     manual_issues = []
+    manual_checks = []
     manual_section = False
 
     for issue in issues_list:
