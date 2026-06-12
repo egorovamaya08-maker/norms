@@ -21,6 +21,22 @@ TABLE_CONTINUATION_RE = re.compile(
 # Нормализация текста: удаление невидимок, замена пробелов
 # ------------------------------------------------------------
 
+def check_word_document(file_path):
+    # ... ваш код ...
+    
+    # В конце функции, перед return:
+    if manual_checks:
+        # Добавляем принудительное общее напоминание для человека
+        all_issues.append("📋 Экспертная проверка (ОБЯЗАТЕЛЬНО):")
+        all_issues.append("⚠️ Проверьте вручную первые 4 страницы на соответствие требованиям.")
+        all_issues.append("⚠️ Проверьте вручную наличие надписей «Продолжение таблицы»/«Окончание таблицы» на всех страницах разрыва.")
+        all_issues.append("⚠️ Проверьте правильность переноса рисунков на новую страницу и их подписей.")
+        
+        # Добавляем конкретные замечания по таблицам и рисункам
+        all_issues.extend(manual_checks)
+        
+    return group_issues(all_issues)
+
 def iter_block_items(parent):
     """
     Генератор, который обходит документ и возвращает параграфы и таблицы
@@ -1578,6 +1594,14 @@ if uploaded_file is not None:
     with st.spinner("Проверяем..."):
         results = check_word_document(uploaded_file)
     st.subheader("Результаты проверки:")
+
+    for r in results:
+        # Если это заголовок секции с комментариями, выделим его
+        if "📋" in r or "⚠️" in r:
+            st.markdown(f"---")
+            st.markdown(f"**{r}**")
+        else:
+            st.write(r)
     
     # Проверяем, есть ли реальные ошибки (исключая informational messages)
     real_issues = [r for r in results if not r.startswith("📋") and not r.startswith("❌ Отсутствует введение")]
