@@ -21,36 +21,8 @@ TABLE_CONTINUATION_RE = re.compile(
 # Нормализация текста: удаление невидимок, замена пробелов
 # ------------------------------------------------------------
 
-def check_word_document(file_path):
-    # ... ваш код ...
-    
-    # В конце функции, перед return:
-    if manual_checks:
-        # Добавляем принудительное общее напоминание для человека
-        all_issues.append("📋 Экспертная проверка (ОБЯЗАТЕЛЬНО):")
-        all_issues.append("⚠️ Проверьте вручную первые 4 страницы на соответствие требованиям.")
-        all_issues.append("⚠️ Проверьте вручную наличие надписей «Продолжение таблицы»/«Окончание таблицы» на всех страницах разрыва.")
-        all_issues.append("⚠️ Проверьте правильность переноса рисунков на новую страницу и их подписей.")
-        
-        # Добавляем конкретные замечания по таблицам и рисункам
-        all_issues.extend(manual_checks)
-        
-    return group_issues(all_issues)
 
-def iter_block_items(parent):
-    """
-    Генератор, который обходит документ и возвращает параграфы и таблицы
-    в порядке их следования (для проверки таблиц и пустых строк вокруг них).
-    """
-    from docx.oxml.ns import qn
-    from docx.text.paragraph import Paragraph
-    from docx.table import Table
 
-    for child in parent.element.body:
-        if child.tag == qn('w:p'):
-            yield Paragraph(child, parent)
-        elif child.tag == qn('w:tbl'):
-            yield Table(child, parent)
 
 def iter_block_items(parent):
     """
