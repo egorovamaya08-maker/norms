@@ -1280,7 +1280,23 @@ def check_word_document(file):
             except:
                 pass
                 
-            # 4. Жесткая проверка интервала напрямую через XML (для строгих шаблонов Word)
+            # 3. НОВОЕ: интервал перед следующим абзацем
+            if idx + 1 < len(doc.paragraphs): 
+                next_p = doc.paragraphs[idx + 1]
+            if next_p.paragraph_format.space_before and next_p.paragraph_format.space_before.pt >= 12:
+                has_empty_after = True
+            # 4. НОВОЕ: если это стиль заголовка Word (в нём отступ уже заложен)
+            try: 
+                style_name = p.style.name.lower() if p.style else ""
+                if "heading" in style_name or "заголовок" in style_name:
+                    has_empty_after = True
+            except:
+                pass
+            if not has_empty_after:
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или задайте интервал после 12 pt)")
+
+
+# 4. Жесткая проверка интервала напрямую через XML (для строгих шаблонов Word)
             try:
                 pPr = p._element.find(qn('w:pPr'))
                 if pPr is not None:
@@ -1295,6 +1311,7 @@ def check_word_document(file):
 
             if not has_empty_after:
                 auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+                
             # -------------------------------------------------------------
 
 
