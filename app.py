@@ -1332,8 +1332,10 @@ def check_word_document(file):
 
     # --- ПРОВЕРКА СОДЕРЖАНИЯ (должна быть первой) ---
     toc_errors = check_toc(doc, start_idx)
+    st.write(f"DEBUG: toc_errors = {toc_errors}")  # временно
     # Добавляем ошибки содержания в начало списка auto_issues
     auto_issues = toc_errors + auto_issues
+    st.write(f"DEBUG: auto_issues после содержания = {auto_issues}")  # временно
 
     
     # --- НУМЕРАЦИЯ СТРАНИЦ ---
