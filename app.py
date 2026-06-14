@@ -157,8 +157,6 @@ def is_section_header(text):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
-    if is_intro_context and cleaned.rstrip().endswith('.'):
-        return False
     
     if cleaned.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ"}:
         return True
@@ -1589,6 +1587,7 @@ def check_word_document(file):
    # auto_issues = []
 
     # Ищем "ВВЕДЕНИЕ"
+    
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
         if not txt:
@@ -1598,15 +1597,9 @@ def check_word_document(file):
         if txt.upper() == "ВВЕДЕНИЕ" and is_section_header(txt):
             intro_found = True
             start_idx = i
+            intro_start_i = i
             break
-    for i, p in enumerate(doc.paragraphs):
-        if i < start_idx:
-            continue
-        # Если мы еще не вышли из введения (например, до первого реального раздела)
-        is_intro = (start_idx is not None and i < start_idx + 5)  # примерное определение
-        if is_section_header(txt, is_intro_context=is_intro):
 
-        
     # Если не нашли "ВВЕДЕНИЕ" — ищем любой раздел
     if not intro_found:
         for i, p in enumerate(doc.paragraphs):
