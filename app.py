@@ -192,6 +192,58 @@ def extract_toc_entries(doc, start_idx):
                 toc_entries.append(clean)
     return toc_entries
 
+# ========== ВСТАВИТЬ НОВУЮ ФУНКЦИЮ ЗДЕСЬ ==========
+def extract_toc_entries_clean(doc, start_idx=0):
+    """
+    Глубокий разбор автоматического оглавления (TOC) через XML.
+    Извлекает текст строк, игнорируя служебные символы и номера страниц.
+    """
+    toc_entries = []
+    
+    # Ищем все гиперссылки в документе (Word оборачивает строки TOC в w:hyperlink для навигации)
+    body_element = doc.element.body
+    
+    # Нам нужны только те элементы, которые идут в начале документа (до Введения)
+    for hyperlink in body_element.xpath('.//w:hyperlink'):
+        # Собираем весь текст внутри этой гиперссылки
+        text_nodes = hyperlink.xpath('.//w:t')
+        if not text_nodes:
+            continue
+            
+        full_text = "".join(node.text for node in text_nodes if node.text).strip()
+        
+        # Если строка содержит только номер страницы или пустая — пропускаем
+        if not full_text or full_text.isdigit():
+            continue
+            
+        # Очищаем строку от отточий (точек), табов и номеров страниц на конце
+        clean_text = re.sub(r'[\t\s\.]{2,}\d+$', '', full_text).strip()
+        # Дополнительно убираем оставшиеся хвосты из точек, если они склеились
+        clean_text = re.sub(r'\.{2,}', '', clean_text).strip()
+        
+        if clean_text and len(clean_text) > 3:
+            # Избегаем дубликатов, если Word разбил одну строку на несколько гиперссылок
+            if clean_text not in toc_entries:
+                toc_entries.append(clean_text)
+                
+    # Если XML-метод через гиперссылки не сработал, откатываемся на улучшенный текстовый поиск
+    if not toc_entries:
+        search_limit = min(20, len(doc.paragraphs))
+        for i in range(search_limit):
+            txt = doc.paragraphs[i].text.strip()
+            if not txt:
+                continue
+            # Проверяем строки с точками или явными номерами глав
+            if has_page_number(txt) or re.match(r'^\d+(\.\d+)*\s+[А-Яа-я]', txt):
+                clean = re.sub(r'[\t\s\.]{2,}\d+$', '', txt).strip()
+                clean = re.sub(r'\.{2,}', '', clean).strip()
+                if clean and clean not in toc_entries:
+                    toc_entries.append(clean)
+                    
+    return toc_entries
+# ========== КОНЕЦ ВСТАВКИ ==========
+
+
 def is_dash_char(ch):
     code = ord(ch)
     if code in [0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015]:
