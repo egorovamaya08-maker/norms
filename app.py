@@ -1424,15 +1424,14 @@ def check_toc(doc, start_idx):
 
     # 2. Собираем данные для отображения
     table_data = []
-    
+
     for entry in toc_entries:
         try:
             num = str(entry[0]).strip() if (len(entry) > 0 and entry[0]) else ""
             title = str(entry[1]).strip() if (len(entry) > 1 and entry[1]) else ""
             
-            # Условие: если в тексте есть 3 и более точек подряд — удаляем их подчистую
+            # КРИТИЧЕСКИЙ ПАТЧ: Очистка от цепочек точек вордовского оглавления
             title = re.sub(r'\.{3,}', '', title).strip()
-            # Дополнительно убираем оставшиеся одиночные точки и цифры номеров страниц на конце строки
             title = re.sub(r'\s+\d+$', '', title).strip()
             title = title.rstrip('.')
             
@@ -1440,12 +1439,8 @@ def check_toc(doc, start_idx):
             
             found_text = "Не найдено"
             status_message = "Не найдено"
-            
             clean_toc_num = num.strip('.') if num else ""
             
-            # Исключаем ложные срабатывания списков задач из Введения:
-            # Если номер состоит всего из одной цифры (1, 2), но это не "1 Литературный обзор", 
-            # и в нашей базе заголовков такого точного совпадения нет — не берем ложный пункт
             if clean_toc_num and clean_toc_num in headers_in_text:
                 actual_title = headers_in_text[clean_toc_num]
                 found_text = f"{clean_toc_num}. {actual_title}"
@@ -1453,7 +1448,6 @@ def check_toc(doc, start_idx):
                     status_message = "Совпадает"
                 else:
                     status_message = "Добавьте точку в номере и удалите точку в конце"
-                    
             elif not clean_toc_num and title.upper() in headers_in_text:
                 actual_title = headers_in_text[title.upper()]
                 found_text = actual_title
@@ -1461,11 +1455,8 @@ def check_toc(doc, start_idx):
                     status_message = "Совпадает"
                 else:
                     status_message = "Добавьте точку в номере и удалите точку в конце"
-                    
             else:
-                # Резервный поиск по частичному совпадению текста
                 for key, value in headers_in_text.items():
-                    # Фильтруем слишком короткие строки, чтобы пункты списков (1., 2.) не привязывались к случайным параграфам
                     if len(title) > 10 and (title.lower() in value.lower() or value.lower() in title.lower()):
                         if key and key.replace('.', '').isdigit():
                             found_text = f"{key}. {value}"
@@ -1480,11 +1471,7 @@ def check_toc(doc, start_idx):
                 "В тексте документа": found_text
             })
         except Exception:
-            table_data.append({
-                "Статус / Рекомендация": "Ошибка анализа строки",
-                "Содержание": "Ошибка чтения данных",
-                "В тексте документа": "Пропустите этот пункт"
-            })
+            continue
             
     # 3. Выводим красивую HTML таблицу с новыми пропорциями колонок
     if table_data:
