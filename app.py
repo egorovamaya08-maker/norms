@@ -1252,6 +1252,49 @@ def check_toc(doc, start_idx):
                     st.text("... (показаны первые 15 непустых абзацев)")
                     break
     st.markdown("---")
+    # Если после всех методов toc_lines всё ещё пуст — пробуем извлечь из TOC через XML
+    if not toc_lines:
+        # Ищем поле TOC по всему документу (не только рядом с заголовком)
+        toc_field_paragraphs = []
+        body_elems = list(doc.element.body)
+        in_toc = False
+        
+        for elem in body_elems:
+            if elem.tag == qn('w:p'):
+                # Ищем начало поля TOC
+                fldChar = elem.find('.//w:fldChar', NSMAP)
+                if fldChar is not None and fldChar.get(qn('w:fldCharType')) == 'begin':
+                    # Проверяем следующий элемент на instrText с TOC
+                    parent = elem.getparent()
+                    idx = body_elems.index(elem)
+                    if idx + 1 < len(body_elems):
+                        next_elem = body_elems[idx + 1]
+                        instr = next_elem.find('.//w:instrText', NSMAP)
+                        if instr is not None and instr.text and 'TOC' in instr.text.upper():
+                            in_toc = True
+                            continue
+                
+                if in_toc:
+                    # Проверяем, не конец ли поля
+                    end_fldChar = elem.find('.//w:fldChar', NSMAP)
+                    if end_fldChar is not None and end_fldChar.get(qn('w:fldCharType')) == 'end':
+                        in_toc = False
+                        continue
+                    
+                    # Это строка внутри поля TOC
+                    # Найдём соответствующий объект Paragraph
+                    for p in doc.paragraphs:
+                        if p._element is elem:
+                            txt = p.text.strip()
+                            if txt and len(txt) > 3:  # Игнорируем пустые и слишком короткие
+                                toc_field_paragraphs.append(p)
+                            break
+        
+        if toc_field_paragraphs:
+            toc_lines = toc_field_paragraphs
+            # Отладка
+            st.success(f"✅ Найдено {len(toc_lines)} строк через прямое сканирование поля TOC")
+
     
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
