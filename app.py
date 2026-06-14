@@ -1417,15 +1417,32 @@ def check_toc(doc, start_idx):
         elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
             doc_headers.append(('special', txt.upper(), txt, False))
     
-    # === 4. Парсинг собранных строк оглавления ===
         # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
     
     # ========== НОВАЯ ЛОГИКА ==========
-    # Сначала пробуем улучшенный XML-метод
-    toc_entries = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
+    # Сначала пробуем улучшенный XML-метод (он возвращает список строк)
+    toc_clean_strings = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
     
-    # Если не сработало, используем старый метод
+    if toc_clean_strings:
+        # Преобразуем строки в формат кортежей (num, title, page, level)
+        for entry_text in toc_clean_strings:
+            # Определяем номер раздела
+            num_match = re.match(r'^(\d+(?:\.\d+)?)\s+', entry_text)
+            if num_match:
+                num = num_match.group(1)
+                title = re.sub(r'^\d+(?:\.\d+)?\s*', '', entry_text).strip()
+                level = '1' if '.' not in num else '2'
+                toc_entries.append((num, title, "?", level))
+            else:
+                # Специальный раздел (ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ и т.д.)
+                if entry_text.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+                    toc_entries.append((None, entry_text, "?", 'special'))
+                else:
+                    # Возможно, это подраздел без номера
+                    toc_entries.append((None, entry_text, "?", 'special'))
+    
+    # Если улучшенный метод не сработал, используем старый метод
     if not toc_entries:
         for p in toc_lines:
             txt = p.text.strip()
@@ -1459,7 +1476,19 @@ def check_toc(doc, start_idx):
             else:
                 if content.strip():
                     toc_entries.append((None, content, page_num, 'special'))
+    
+    # Удаляем дубликаты (если один и тот же раздел попал дважды)
+    seen = set()
+    unique_toc_entries = []
+    for entry in toc_entries:
+        key = entry[0] if entry[0] else entry[1]  # num или title
+        if key not in seen:
+            seen.add(key)
+            unique_toc_entries.append(entry)
+    toc_entries = unique_toc_entries
     # ========== КОНЕЦ НОВОЙ ЛОГИКИ ==========
+    
+    
     for p in toc_lines:
         txt = p.text.strip()
         
