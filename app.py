@@ -1059,40 +1059,37 @@ def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
     return False
 
 def check_toc(doc, start_idx):
-    """Проверка автособираемого содержания"""
+    """Проверка автособираемого содержания — улучшенная версия"""
     errors = []
     body_elems = list(doc.element.body)
-    
-    # =======================================================
-    # ВСТАВИТЬ СЮДА: НОВЫЙ БЛОК ПОИСКА ЗАГОЛОВКА
-    # =======================================================
+
+    # === 1. Улучшенный поиск заголовка "СОДЕРЖАНИЕ" ===
     toc_header_idx = None
     toc_header_para = None
-    
-    # Ищем заголовок в первых 50 абзацах документа (без жесткой привязки к start_idx)
-    search_limit = min(len(doc.paragraphs), 50)
-    
-    for i, p in enumerate(doc.paragraphs[:search_limit]):
-        txt = p.text.strip().upper()
-        # Очищаем текст от спецсимволов и лишних пробелов, оставляем только буквы
-        # Это помогает найти заголовок, даже если внутри есть скрытые символы верстки
-        clean_txt = "".join(filter(str.isalpha, txt))
+
+    # Ищем в первых 100 абзацах + полный перебор
+    for i, p in enumerate(doc.paragraphs[:100]):
+        full_text = "".join(node.text or "" for node in p._element.iter())
+        clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', full_text.upper())  # убираем все пробелы/невидимки
         
-        if "СОДЕРЖАНИЕ" in clean_txt or "ОГЛАВЛЕНИЕ" in clean_txt:
+        if "СОДЕРЖАНИЕ" in clean or "ОГЛАВЛЕНИЕ" in clean:
             toc_header_idx = i
             toc_header_para = p
             break
-            
-    # Дополнительная проверка: если не нашли в абзацах, ищем внутри таблиц 
-    # (иногда автособираемое оглавление помещается в невидимую таблицу)
+
+    # Если не нашли — ищем по XML в body (самый надёжный способ)
     if toc_header_idx is None:
-        for i, p in enumerate(doc.paragraphs):
-             # Используем регулярные выражения для гибкого поиска
-             import re
-             if re.search(r'(ОГЛАВЛЕНИЕ|СОДЕРЖАНИЕ)', p.text, re.IGNORECASE):
-                 toc_header_idx = i
-                 toc_header_para = p
-                 break
+        for i, elem in enumerate(body_elems):
+            if elem.tag == qn('w:p'):
+                full_text = "".join(node.text or "" for node in elem.iter() if node.text)
+                if re.search(r'СОДЕРЖАНИЕ|ОГЛАВЛЕНИЕ', full_text, re.IGNORECASE):
+                    # Находим соответствующий Paragraph
+                    for p_idx, p in enumerate(doc.paragraphs):
+                        if p._element is elem:
+                            toc_header_idx = p_idx
+                            toc_header_para = p
+                            break
+                    break
 
     if toc_header_idx is None or toc_header_para is None:
         errors.append("Содержание – отсутствует заголовок «СОДЕРЖАНИЕ»")
