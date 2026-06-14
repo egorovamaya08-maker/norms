@@ -1329,37 +1329,44 @@ def check_toc(doc, start_idx):
         errors = corrected_errors
 
     errors = [err for err in errors if not err.startswith("Содержание – отсутствует раздел")] #временно
-   # ==============================================================================
-    # ВРЕМЕННЫЙ БЛОК ДЛЯ ОТЛАДКИ (ВСТАВИТЬ В КОНЕЦ check_toc ПЕРЕД return)
+  # ==============================================================================
+    # ИСПРАВЛЕННЫЙ ВРЕМЕННЫЙ БЛОК ДЛЯ ОТЛАДКИ (ВСТАВИТЬ В КОНЕЦ check_toc ПЕРЕД return)
     # ==============================================================================
+    st.markdown("---")
     st.markdown("### 🔍 Отладочная информация оглавления")
     
-    # 1. Показываем, сколько вообще строк было найдено в зоне оглавления
+    # 1. Безопасная проверка сырых строк
     if 'toc_lines' in locals() and toc_lines:
         st.write(f"**Всего сырых строк найдено в зоне TOC:** {len(toc_lines)}")
         with st.expander("Посмотреть все сырые строки из зоны Содержания"):
             for idx, p in enumerate(toc_lines):
-                # Проверяем, есть ли там скрытые XML-поля
-                xml_text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
-                st.text(f"Строка {idx+1}: {repr(p.text)} | XML-текст: {repr(xml_text)}")
+                st.text(f"Строка {idx+1}: {repr(p.text)}")
+    elif 'toc_paragraphs' in locals() and toc_paragraphs:
+        st.write(f"**Всего сырых строк найдено в зоне TOC (переменная toc_paragraphs):** {len(toc_paragraphs)}")
+        with st.expander("Посмотреть все сырые строки"):
+            for idx, p in enumerate(toc_paragraphs):
+                st.text(f"Строка {idx+1}: {repr(p.text)}")
     else:
-        st.error("❌ Переменная toc_lines пуста или не определена в этой области кода!")
+        st.warning("⚠️ Переменная строк оглавления (toc_lines/toc_paragraphs) пуста или не найдена.")
 
-    # 2. Показываем, что в итоге попало в отфильтрованный список финальных пунктов
+    # 2. Безопасная проверка распознанных пунктов
     if 'toc_entries' in locals() and toc_entries:
         st.write(f"**Успешно распознано пунктов оглавления (toc_entries):** {len(toc_entries)}")
-        with st.expander("Посмотреть распознанные пункты (Номер, Название, Страница, Уровень)"):
+        with st.expander("Посмотреть распознанные пункты"):
             for entry in toc_entries:
-                st.code(f"Номер: {repr(entry[0])} | Название: {repr(entry[1])} | Стр: {entry[2]} | Уровень: {entry[3]}")
+                st.code(str(entry))
     else:
-        st.warning("⚠️ Список toc_entries пуст. Ни одна строка не прошла фильтрацию!")
+        st.warning("⚠️ Список toc_entries пуст. Ни одна строка содержания не распозналась.")
         
-    # 3. Выводим заголовки, которые скрипт смог найти в самом ТЕКСТЕ документа для сверки
+    # 3. БЕЗОПАСНЫЙ вывод заголовков из тела (исправляет падение ValueError)
     if 'doc_headers' in locals() and doc_headers:
         st.write(f"**Найденные заголовки в теле документа (для сверки):** {len(doc_headers)}")
         with st.expander("Посмотреть заголовки из тела документа"):
-            for h_type, h_text in doc_headers:
-                st.text(f"[{h_type}] -> {repr(h_text)}")
+            for idx, h_item in enumerate(doc_headers):
+                st.text(f"Заголовок {idx+1}: {repr(h_item)}")
+    else:
+        st.warning("⚠️ Список doc_headers пуст.")
+    st.markdown("---")
     # ==============================================================================
    
     return errors
