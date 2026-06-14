@@ -1409,7 +1409,7 @@ def check_toc(doc, start_idx):
         elif level == 'special':
             headers_in_text[title.upper()] = title
             
-    # Собираем данные для отображения в виде таблицы с границами
+# Собираем данные для отображения в виде таблицы с границами
     table_data = []
     
     for entry in toc_entries:
@@ -1444,20 +1444,25 @@ def check_toc(doc, start_idx):
                     status_message = "Добавьте точку в номере и удалите точку в конце"
                     break
                     
+        # Ставим "Статус / Рекомендация" на первое место в словаре
         table_data.append({
+            "Статус / Рекомендация": status_message,
             "Содержание": toc_display,
-            "В тексте": found_text,
-            "Статус / Рекомендация": status_message
+            "В тексте документа": found_text
         })
         
-    # Выводим данные в формате интерактивной таблицы с границами на всю ширину
-    # Выводим данные в формате интерактивной таблицы с границами на всю ширину
+    # Выводим данные в формате интерактивной таблицы с измененным порядком колонок
     if table_data:
         st.dataframe(
             table_data, 
             use_container_width=True, 
             hide_index=True,
             column_config={
+                "Статус / Рекомендация": st.column_config.TextColumn(
+                    "Статус / Рекомендация",
+                    help="Результат сверки и указания к исправлению",
+                    width="large"
+                ),
                 "Содержание": st.column_config.TextColumn(
                     "Содержание",
                     help="Пункт, найденный в оглавлении",
@@ -1467,11 +1472,6 @@ def check_toc(doc, start_idx):
                     "В тексте документа",
                     help="Соответствующий заголовок из тела документа",
                     width="medium"
-                ),
-                "Статус / Рекомендация": st.column_config.TextColumn(
-                    "Статус / Рекомендация",
-                    help="Результат сверки и указания к исправлению",
-                    width="large"
                 )
             }
         )
