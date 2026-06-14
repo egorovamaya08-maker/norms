@@ -211,55 +211,39 @@ def extract_toc_entries(doc, start_idx):
 
 # ========== ВСТАВИТЬ НОВУЮ ФУНКЦИЮ ЗДЕСЬ ==========
 
+# ========== ВСТАВИТЬ / ЗАМЕНИТЬ В ФАЙЛЕ ==========
+
 def extract_toc_entries_clean(doc, start_idx=0):
-    """
-    Глубокий разбор автоматического оглавления (TOC) через XML.
-    Извлекает пары (номер, название) из строк оглавления.
-    """
-    toc_items = []  # список кортежей (number, title)
-    
-    # Ищем все гиперссылки в документе (строки оглавления)
+    """Улучшенная версия: надёжная очистка от точек и номеров страниц"""
+    toc_items = []
     body_element = doc.element.body
     
     for hyperlink in body_element.xpath('.//w:hyperlink'):
-        # Собираем весь текст внутри гиперссылки
         text_nodes = hyperlink.xpath('.//w:t')
         if not text_nodes:
             continue
-            
-        full_text = "".join(node.text for node in text_nodes if node.text).strip()
-        
+        full_text = "".join(node.text or "" for node in text_nodes).strip()
         if not full_text or full_text.isdigit():
             continue
-        
-                # Очищаем от номеров страниц в конце
-        clean_text = re.sub(r'\s*\d+$', '', full_text)  # убираем цифры в конце
-        clean_text = re.sub(r'\.{2,}', ' ', clean_text)   # заменяем 2+ точек на пробел
+
+        # === КРИТИЧЕСКАЯ ОЧИСТКА ===
+        clean_text = re.sub(r'\.{3,}', ' ', full_text)      # удаляем длинные цепочки точек
+        clean_text = re.sub(r'\s*\d+\s*$', '', clean_text) # удаляем номер страницы в конце
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-        clean_text = clean_text.rstrip('.')  # убираем точку в конце
-            
-        
-        if not clean_text or len(clean_text) < 2:
+        clean_text = clean_text.rstrip('.')
+
+        if len(clean_text) < 3:
             continue
-        
-        # Разделяем номер и название
-        # Ищем цифры в начале (например "1", "1.1", "1.3.1")
-        match = re.match(r'^(\d+(?:\.\d+)*)(.*)$', clean_text)
-        
+
+        match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', clean_text)
         if match:
-            number = match.group(1)
+            number = match.group(1).strip()
             title = match.group(2).strip()
-            
-            # Если название пустое, берем весь текст как название без номера
-            if not title:
-                title = clean_text
-            
             toc_items.append((number, title))
         else:
-            # Строка без номера (ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ и т.д.)
             toc_items.append((None, clean_text))
-    
-    # Удаляем дубликаты
+
+    # Убираем дубли
     seen = set()
     unique_items = []
     for item in toc_items:
@@ -267,10 +251,7 @@ def extract_toc_entries_clean(doc, start_idx=0):
         if key not in seen:
             seen.add(key)
             unique_items.append(item)
-    
-
-    
-    return unique_items  
+    return unique_items
             
 def is_dash_char(ch):
     code = ord(ch)
@@ -1342,70 +1323,56 @@ def check_toc(doc, start_idx):
             st.success(f"✅ Найдено {len(toc_lines)} строк через финальное сканирование поля TOC")
        
        
-    # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
-       
+    # === 3. Сбор заголовков из ТЕКСТА документа (исправленная версия) ===
     doc_headers = []
     in_bibliography = False
-    found_first_real_header = False  # Флаг: нашли ли уже настоящий раздел
-    
-    # Определяем, где заканчивается введение (ищем первый заголовок 1 уровня)
     intro_end_idx = start_idx
+
+    # Определяем конец введения
     for i in range(start_idx, len(doc.paragraphs)):
-        txt = doc.paragraphs[i].text.strip()
-        if not txt or has_page_number(txt):
+        txt = normalize_text(doc.paragraphs[i].text).strip()
+        if not txt:
             continue
-        # Если нашли заголовок, который не является пунктом списка (не заканчивается на точку)
-        if re.match(r'^\d+\s+[А-ЯЁ]', txt) and not txt.rstrip().endswith('.'):
+        if is_section_header(txt) and not txt.rstrip('.').endswith('.'):  # не пункт списка
             intro_end_idx = i
             break
-    
+
     for i, p in enumerate(doc.paragraphs):
         if i < start_idx:
             continue
-            
-        txt = p.text.strip()
-        if not txt or has_page_number(txt):
+        raw_text = p.text.strip()
+        if not raw_text or has_page_number(raw_text):
             continue
-            
-        # Определяем, находимся ли мы внутри введения
+
+        txt = normalize_text(raw_text)
         is_in_intro = (i < intro_end_idx)
-            
-        if txt.upper() in ["СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"]:
+
+        # Специальные разделы
+        if txt.upper() in {"СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"}:
             doc_headers.append(('special', txt.upper(), txt, False))
             in_bibliography = True
             continue
-            
         if in_bibliography:
             continue
-            
-        # Пропускаем пункты списка внутри введения (которые заканчиваются на точку)
-        if is_in_intro and txt.rstrip().endswith('.'):
-            continue
-            
-        # Учитываем неразрывный пробел (\xa0) и табуляцию (\t)
-        if (re.match(r'^\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.[\s\xa0\t]+[А-ЯЁа-яё]', txt)) and len(txt) < 100:
-            num_match = re.match(r'^(\d+)[\.\s\xa0\t]', txt)
+
+        # === ИСПРАВЛЕНИЕ: фильтрация пунктов нумерованного списка во введении ===
+        if is_in_intro and re.match(r'^\d+\.\s', txt) and txt.rstrip().endswith('.'):
+            continue  # это пункт списка, а не заголовок
+
+        # Заголовки 1 уровня
+        if is_section_header(txt) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
+            num_match = re.match(r'^(\d+)', txt)
+            num = num_match.group(1) if num_match else ""
+            title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
+            doc_headers.append(('1', num, title, False))
+
+        # Подразделы
+        elif re.match(r'^\d+\.\d+', txt):
+            num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt)
             if num_match:
                 num = num_match.group(1)
-                title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
-                # Если внутри введения и заголовок заканчивается на точку - пропускаем
-                if is_in_intro and title.rstrip().endswith('.'):
-                    continue
-                doc_headers.append(('1', num, title, False))
-        elif re.match(r'^\d+\.\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) and len(txt) < 100:
-            num_match = re.match(r'^(\d+\.\d+)[\s\xa0\t]+', txt)
-            if num_match:
-                num = num_match.group(1)
-                title = re.sub(r'^\d+\.\d+[\s\xa0\t]*', '', txt).strip()
-                doc_headers.append(('2', num, title, True))
-        elif re.match(r'^\d+\.\d+\.\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) and len(txt) < 100:
-            num_match = re.match(r'^(\d+\.\d+\.\d+)[\s\xa0\t]+', txt)
-            if num_match:
-                num = num_match.group(1)
-                title = re.sub(r'^\d+\.\d+\.\d+[\s\xa0\t]*', '', txt).strip()
-                doc_headers.append(('3', num, title, True))
-        elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
-            doc_headers.append(('special', txt.upper(), txt, False))
+                title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt).strip()
+                doc_headers.append(('2', num, title, True))  # уровень 2+
     
                            # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
@@ -1471,63 +1438,37 @@ def check_toc(doc, start_idx):
             continue
 
     # 2. Собираем данные для отображения
+        # 2. Собираем данные для таблицы
     table_data = []
+    headers_in_text = {str(item[1]).strip('.'): item[2] for item in doc_headers if item[0] in ('1','2')}
 
     for entry in toc_entries:
-        try:
-            num = str(entry[0]).strip() if (len(entry) > 0 and entry[0]) else ""
-            title = str(entry[1]).strip() if (len(entry) > 1 and entry[1]) else ""
-            
-            # КРИТИЧЕСКИЙ ПАТЧ: Очистка от цепочек точек вордовского оглавления
-            title = re.sub(r'\.{3,}', '', title).strip()
-            title = re.sub(r'\s+\d+$', '', title).strip()
-            title = title.rstrip('.')
+        num = str(entry[0]).strip() if entry[0] else ""
+        title = str(entry[1]).strip()
 
-                        # ОТЛАДКА: проверяем очистку
-            original = entry[1]
-            if '...' in original or '....' in original:
-                st.write(f"Оригинал: {repr(original)}")
-                st.write(f"Очищено: {repr(title)}")
-                st.write("---")
-                
-            toc_display = f"{num} {title}".strip() if num else title
-            
-            found_text = "Не найдено"
-            status_message = "Не найдено"
-            clean_toc_num = num.strip('.') if num else ""
-            
-            if clean_toc_num and clean_toc_num in headers_in_text:
-                actual_title = headers_in_text[clean_toc_num]
-                found_text = f"{clean_toc_num}. {actual_title}"
-                if title.lower() == actual_title.lower():
-                    status_message = "Совпадает"
-                else:
-                    status_message = "Добавьте точку в номере и удалите точку в конце"
-            elif not clean_toc_num and title.upper() in headers_in_text:
-                actual_title = headers_in_text[title.upper()]
-                found_text = actual_title
-                if title.lower() == actual_title.lower():
-                    status_message = "Совпадает"
-                else:
-                    status_message = "Добавьте точку в номере и удалите точку в конце"
-            else:
-                for key, value in headers_in_text.items():
-                    if len(title) > 10 and (title.lower() in value.lower() or value.lower() in title.lower()):
-                        if key and key.replace('.', '').isdigit():
-                            found_text = f"{key}. {value}"
-                        else:
-                            found_text = value
-                        status_message = "Добавьте точку в номере и удалите точку в конце"
-                        break
-                        
-            table_data.append({
-                "Статус / Рекомендация": status_message,
-                "Содержание": toc_display,
-                "В тексте документа": found_text
-            })
-        except Exception:
-            continue
-            
+        # Дополнительная очистка
+        title = re.sub(r'\.{3,}', '', title).strip().rstrip('.')
+
+        toc_display = f"{num} {title}".strip() if num else title
+
+        found_text = "Не найдено"
+        status = "Не найдено"
+
+        clean_num = num.strip('.')
+
+        if clean_num and clean_num in headers_in_text:
+            actual = headers_in_text[clean_num]
+            found_text = f"{clean_num}. {actual}"
+            status = "Совпадает" if title.lower() == actual.lower() else "Несоответствие названия"
+        elif title.upper() in [k.upper() for k in headers_in_text]:
+            status = "Совпадает"
+
+        table_data.append({
+            "Статус / Рекомендация": status,
+            "Содержание": toc_display,
+            "В тексте документа": found_text
+        })
+        
     # 3. Выводим красивую HTML таблицу с новыми пропорциями колонок
     if table_data:
         st.markdown("""
