@@ -1368,7 +1368,9 @@ def check_word_document(file):
                 if body_idx is not None and not is_on_new_page(doc, body_idx, start_body_pos):
                     auto_issues.append(f"«{key}» – раздел должен начинаться с новой страницы")
             first_line = get_effective_first_line_indent(p)
-            if abs(first_line) > 0.1:
+            if p.paragraph_format.first_line_indent is None:
+                first_line = 0.0
+            if abs(first_line) > 0.3:
                 auto_issues.append(f"«{key}» – уберите абзацный отступ у заголовка")
             if not is_paragraph_bold(p):
                 auto_issues.append(f"«{key}» – заголовок раздела должен быть полужирным")
