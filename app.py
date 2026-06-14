@@ -1226,7 +1226,40 @@ def check_toc(doc, start_idx):
             if (re.match(r'^\d+(\.\d+)*\s+', txt) or 
                 txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]):
                 toc_lines.append(p)        
-    
+        # Финальная попытка: прямое сканирование поля TOC во всём документе
+    if not toc_lines:
+        toc_field_paragraphs = []
+        body_elems = list(doc.element.body)
+        in_toc = False
+        
+        for elem in body_elems:
+            if elem.tag == qn('w:p'):
+                fldChar = elem.find('.//w:fldChar', NSMAP)
+                if fldChar is not None and fldChar.get(qn('w:fldCharType')) == 'begin':
+                    idx_in_body = body_elems.index(elem)
+                    if idx_in_body + 1 < len(body_elems):
+                        next_elem = body_elems[idx_in_body + 1]
+                        instr = next_elem.find('.//w:instrText', NSMAP)
+                        if instr is not None and instr.text and 'TOC' in instr.text.upper():
+                            in_toc = True
+                            continue
+                
+                if in_toc:
+                    end_fldChar = elem.find('.//w:fldChar', NSMAP)
+                    if end_fldChar is not None and end_fldChar.get(qn('w:fldCharType')) == 'end':
+                        in_toc = False
+                        continue
+                    
+                    for p in doc.paragraphs:
+                        if p._element is elem:
+                            txt = p.text.strip()
+                            if txt and len(txt) > 3:
+                                toc_field_paragraphs.append(p)
+                            break
+        
+        if toc_field_paragraphs:
+            toc_lines = toc_field_paragraphs
+            st.success(f"✅ Найдено {len(toc_lines)} строк через финальное сканирование поля TOC")
         # === ОТЛАДКА: выводим информацию о найденных строках ===
     st.markdown("---")
     st.markdown("### 🔍 Отладка сбора строк содержания")
