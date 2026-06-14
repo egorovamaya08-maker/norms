@@ -1473,26 +1473,25 @@ def check_toc(doc, start_idx):
     
     
  if table_data:
-        # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну 
-        # и корректно переносить длинные слова
-        st.markdown("""
-        <style>
-        /* Нацеливаемся на статическую таблицу Streamlit */
-        .stTable table {
-            width: 100% !important;
-            table-layout: fixed !important; /* Фиксированная сетка */
-        }
-        .stTable th, .stTable td {
-            width: 33.33% !important; /* Три колонки — строго по трети ширины */
-            white-space: normal !important; /* Разрешаем перенос строк */
-            word-break: break-word !important; /* Переносим длинные слова */
-            vertical-align: top !important; /* Текст прижат к верху ячейки */
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Выводим как статическую HTML таблицу
-        st.table(table_data)
+        st.dataframe(
+            table_data, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Статус / Рекомендация": st.column_config.TextColumn(
+                    "Статус / Рекомендация", 
+                    width="large" # Одинаковый размер для всех
+                ),
+                "Содержание": st.column_config.TextColumn(
+                    "Содержание", 
+                    width="large"
+                ),
+                "В тексте документа": st.column_config.TextColumn(
+                    "В тексте документа", 
+                    width="large"
+                )
+            }
+        )
     else:
         st.info("Не найдено элементов оглавления для отображения")
 
