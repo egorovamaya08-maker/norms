@@ -248,6 +248,10 @@ def extract_toc_entries_clean(doc, start_idx=0):
         if key not in seen:
             seen.add(key)
             unique_items.append(item)
+    
+
+    
+    return unique_items  
             
 def is_dash_char(ch):
     code = ord(ch)
