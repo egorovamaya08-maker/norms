@@ -1446,13 +1446,35 @@ def check_toc(doc, start_idx):
                     
         table_data.append({
             "Содержание": toc_display,
-            "В тексте文档": found_text,
+            "В тексте": found_text,
             "Статус / Рекомендация": status_message
         })
         
     # Выводим данные в формате интерактивной таблицы с границами на всю ширину
+    # Выводим данные в формате интерактивной таблицы с границами на всю ширину
     if table_data:
-        st.dataframe(table_data, use_container_width=True, hide_index=True)
+        st.dataframe(
+            table_data, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Содержание": st.column_config.TextColumn(
+                    "Содержание",
+                    help="Пункт, найденный в оглавлении",
+                    width="medium"
+                ),
+                "В тексте документа": st.column_config.TextColumn(
+                    "В тексте документа",
+                    help="Соответствующий заголовок из тела документа",
+                    width="medium"
+                ),
+                "Статус / Рекомендация": st.column_config.TextColumn(
+                    "Статус / Рекомендация",
+                    help="Результат сверки и указания к исправлению",
+                    width="large"
+                )
+            }
+        )
     
 
     # === 6. Проверка форматирования строк оглавления ===
