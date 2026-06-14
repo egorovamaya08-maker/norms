@@ -1086,8 +1086,6 @@ def check_toc(doc, start_idx):
                         clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
                         if "СОДЕРЖАНИЕ" in clean or "ОГЛАВЛЕНИЕ" in clean:
                             toc_header_para = p
-                            # Чтобы не ломать индексы основного текста, 
-                            # ставим индекс первого абзаца после этой таблицы
                             toc_header_idx = 0 
                             break
                     if toc_header_para: break
@@ -1118,15 +1116,13 @@ def check_toc(doc, start_idx):
     if abs(get_effective_left_indent(toc_header_para)) > 0.1:
         errors.append("Содержание – уберите отступ слева у заголовка")
     
-    # Пустая строка после заголовка (только если заголовок в обычных абзацах)
+    # Пустая строка после заголовка
     if toc_header_idx > 0 and toc_header_idx + 1 < len(doc.paragraphs):
         next_para = doc.paragraphs[toc_header_idx + 1]
         if not is_empty_paragraph(next_para):
             errors.append("Содержание – добавьте пустую строку после заголовка")
     
-      
     # === 2. Сбор строк оглавления ===
-    # === НАЧАЛО БЛОКА: Поиск и сбор строк Содержания ===
     toc_lines = []
     is_inside_toc_zone = False
     toc_title_found = False
@@ -1134,54 +1130,44 @@ def check_toc(doc, start_idx):
     for idx, p in enumerate(doc.paragraphs):
         txt = normalize_text(p.text)
         
-        # 1. Ловим начало зоны Содержания
         if not toc_title_found and txt.upper() in ["СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ"]:
             toc_title_found = True
             is_inside_toc_zone = True
             continue
             
         if is_inside_toc_zone:
-            # 2. Ловим конец зоны Содержания (Введение или Глава 1)
             if txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ"] or re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE) or re.match(r'^1\s+[А-ЯЁ]', txt):
                 is_inside_toc_zone = False
                 break
                 
-            # Читаем текст, включая скрытые XML-элементы автооглавления
             xml_text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
             p_text = xml_text if xml_text else p.text.strip()
             
-            # Если в строке есть хоть какой-то текст, временно сохраняем её оригинальный текст
             if p_text.strip():
-                # Подменяем p.text для парсера, чтобы он видел скрытые поля как обычные строки
+                # Подменяем текст, чтобы последующие проверки форматирования видели его корректно
                 p.text = p_text
                 toc_lines.append(p)
                 
-    # Переприсваиваем переменную, чтобы тестовый блок её точно увидел
     toc_paragraphs = toc_lines 
-    # === КОНЕЦ БЛОКА ===
-    # Если заголовок в таблице, строки оглавления ищем в той же таблице/абзацах вокруг
-    start_search = toc_header_idx + 1 if toc_header_idx > 0 else 0
     
-    for i in range(start_search, len(doc.paragraphs)):
-        p = doc.paragraphs[i]
-        txt = p.text.strip()
-        if not txt:
-            continue
-        
-        # Стоп-слово: если это реальный заголовок в тексте (без цифр страниц в конце)
-        if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
-            break
-            
-        if not re.search(r'\d+$', txt):
-            continue
-        toc_lines.append(p)
+    # Если XML-парсером ничего не нашлось, используем стандартный бэкап-цикл
+    if not toc_lines:
+        start_search = toc_header_idx + 1 if toc_header_idx > 0 else 0
+        for i in range(start_search, len(doc.paragraphs)):
+            p = doc.paragraphs[i]
+            txt = p.text.strip()
+            if not txt:
+                continue
+            if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
+                break
+            if re.search(r'\d+$', txt):
+                toc_lines.append(p)
     
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
     in_bibliography = False
     
     for i, p in enumerate(doc.paragraphs):
-        # Начинаем собирать заголовки только ПОСЛЕ оглавления (минимум после start_idx)
         if i < start_idx:
             continue
             
@@ -1189,7 +1175,6 @@ def check_toc(doc, start_idx):
         if not txt or has_page_number(txt):
             continue
             
-        # Игнорируем всё, что идет внутри самого Списка литературы
         if txt.upper() in ["СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"]:
             doc_headers.append(('special', txt.upper(), txt, False))
             in_bibliography = True
@@ -1198,14 +1183,12 @@ def check_toc(doc, start_idx):
         if in_bibliography:
             continue
             
-        # Разделы 1 уровня (например: "1 Литературный обзор")
         if (re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt)) and len(txt) < 100:
             num_match = re.match(r'^(\d+)[\.\s]', txt)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
                 doc_headers.append(('1', num, title, False))
-        # Подразделы 2 уровня (например: "1.1 Методология")
         elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt) and len(txt) < 100:
             num_match = re.match(r'^(\d+\.\d+)(?:\.\d+)*', txt)
             if num_match:
@@ -1213,20 +1196,30 @@ def check_toc(doc, start_idx):
                 if len(num.split('.')) <= 2:
                     title = re.sub(r'^\d+\.\d+\s*', '', txt).strip()
                     doc_headers.append(('2', num, title, True))
-        # Специальные разделы
         elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
             doc_headers.append(('special', txt.upper(), txt, False))
     
     # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
     for p in toc_lines:
-        txt = p.text
+        txt = p.text.strip()
+        
+        # СТРОГАЯ ФИЛЬТРАЦИЯ: Полностью отсекаем списки и аномально длинные текстовые строки
+        if len(txt) > 150 or txt.startswith('•') or txt.startswith('-') or len(txt.split()) > 12:
+            continue
+            
         page_match = re.search(r'(\d+)$', txt)
         if not page_match:
-            continue
-        page_num = page_match.group(1)
-        content = txt[:page_match.start()].strip()
-        content = re.sub(r'[.\s]+$', '', content).strip()
+            # Поддержка автооглавления: если цифра скрыта, но строка оформлена как раздел, берём её
+            if re.match(r'^\d+(\.\d+)*\s+', txt) or txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+                page_num = "3"
+                content = txt
+            else:
+                continue
+        else:
+            page_num = page_match.group(1)
+            content = txt[:page_match.start()].strip()
+            content = re.sub(r'[.\s\t]+$', '', content).strip()
         
         num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
         if num_match:
@@ -1234,10 +1227,11 @@ def check_toc(doc, start_idx):
             title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
             level = '1' if '.' not in num else '2'
             if len(num.split('.')) > 2:
-                continue  # Пропускаем уровни 1.1.1
+                continue 
             toc_entries.append((num, title, page_num, level))
         else:
-            toc_entries.append((None, content, page_num, 'special'))
+            if content.strip():
+                toc_entries.append((None, content, page_num, 'special'))
     
     # === 5. Сверка Содержания и Текста ===
     doc_headers_by_num = {}
@@ -1246,14 +1240,14 @@ def check_toc(doc, start_idx):
             doc_headers_by_num[num] = title
         elif level == 'special':
             doc_headers_by_num[title] = title  
-        # Нормализуем ключи (убираем точку в конце номера, если она есть)
+            
     normalized_doc_headers = {}
     for key, value in doc_headers_by_num.items():
         norm_key = key.rstrip('.')
         normalized_doc_headers[norm_key] = value
     doc_headers_by_num = normalized_doc_headers
     
-    # Проверка: все ли пункты из Оглавления есть в тексте
+    # Сверка 1: Все ли пункты из Оглавления присутствуют в самом тексте
     for num, title, page, level in toc_entries:
         key = num if num else title
         key = key.rstrip('.')
@@ -1264,57 +1258,32 @@ def check_toc(doc, start_idx):
             if re.sub(r'^(\d+\.?)\s*', '', title).lower() != re.sub(r'^(\d+\.?)\s*', '', expected_title).lower():
                 errors.append(f"Содержание – заголовок «{title}» не соответствует заголовку в тексте («{expected_title}»)")
     
-    # Проверка: все ли разделы из Текста внесены в Оглавление
+    # Сверка 2: Все ли реальные разделы текста внесены в Оглавление
     for level, num, title, is_sub in doc_headers:
         key = num if level in ('1', '2') else title
-        found = any((entry[0] == key or (entry[0] is None and entry[1].lower() == key.lower())) for entry in toc_entries)
+        key = key.rstrip('.')
+        
+        found = False
+        for entry in toc_entries:
+            entry_key = entry[0] if entry[0] else entry[1]
+            if entry_key:
+                entry_key = entry_key.rstrip('.')
+                if entry_key.lower() == key.lower():
+                    found = True
+                    break
+                    
         if not found:
             errors.append(f"Содержание – отсутствует раздел «{title}» (хотя он есть в тексте документа)")
 
-    # Если обычным способом строки не найдены, пробуем собрать все абзацы 
-    # после заголовка «СОДЕРЖАНИЕ», которые заканчиваются цифрой (номер страницы)
-    if not toc_lines:
-        backup_lines = []
-        start_search = toc_header_idx + 1 if toc_header_idx is not None else 0
-        for i in range(start_search, len(doc.paragraphs)):
-            p = doc.paragraphs[i]
-            txt = p.text.strip()
-            if not txt:
-                continue
-            # Останавливаемся, если встретили раздел без номера страницы (например, ВВЕДЕНИЕ без цифры)
-            if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
-                break
-            # Если строка заканчивается цифрой — это строка содержания
-            if re.search(r'\d+$', txt):
-                backup_lines.append(p)
-        if backup_lines:
-            toc_lines = backup_lines
-            # Пересобираем toc_entries заново
-            toc_entries = []
-            for p in toc_lines:
-                txt = p.text
-                page_match = re.search(r'(\d+)$', txt)
-                if not page_match:
-                    continue
-                page_num = page_match.group(1)
-                content = txt[:page_match.start()].strip()
-                content = re.sub(r'[.\s]+$', '', content).strip()
-                num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
-                if num_match:
-                    num = num_match.group(1)
-                    title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
-                    level = '1' if '.' not in num else '2'
-                    if len(num.split('.')) <= 2:
-                        toc_entries.append((num, title, page_num, level))
-                else:
-                    toc_entries.append((None, content, page_num, 'special'))
-
-    
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
         txt = p.text.strip()
         if not txt: continue
         
+        # Пропускаем проверку стилей для отфильтрованного мусора
+        if len(txt) > 150 or txt.startswith('•') or len(txt.split()) > 12:
+            continue
+            
         sizes = get_font_size_pt(p)
         if sizes and any(abs(s - 14) > 0.5 for s in sizes):
             errors.append("Содержание – установите размер шрифта 14 пт для всех строк")
@@ -1340,64 +1309,30 @@ def check_toc(doc, start_idx):
         except:
             pass
 
-           # === ФИЛЬТРАЦИЯ ЛОЖНЫХ ОШИБОК ОТСУТСТВИЯ РАЗДЕЛОВ ===
-        corrected_errors = []
-        for err in errors:
-            # Если это ошибка об отсутствии раздела
-            if err.startswith("Содержание – отсутствует раздел") and "хотя он есть в тексте" not in err:
-                # Извлекаем название раздела
-                match = re.search(r'«([^»]+)»', err)
-                if match:
-                    title = match.group(1)
-                    # Проверяем, есть ли такой заголовок в doc_headers (реальные заголовки документа)
-                    found_in_doc = any(
-                        doc_title.upper() == title.upper() 
-                        for _, _, doc_title, _ in doc_headers
-                    )
-                    if found_in_doc:
-                        # Раздел есть в тексте, но парсер не нашёл его в оглавлении — пропускаем ошибку
-                        continue
-            corrected_errors.append(err)
-        errors = corrected_errors
-
-    errors = [err for err in errors if not err.startswith("Содержание – отсутствует раздел")] #временно
-  # ==============================================================================
-    # ИСПРАВЛЕННЫЙ ВРЕМЕННЫЙ БЛОК ДЛЯ ОТЛАДКИ (ВСТАВИТЬ В КОНЕЦ check_toc ПЕРЕД return)
+    # ==============================================================================
+    # ТЕСТОВЫЙ БЛОК ОТЛАДКИ С ТЕКУЩИМИ ДАННЫМИ
     # ==============================================================================
     st.markdown("---")
     st.markdown("### 🔍 Отладочная информация оглавления")
-    
-    # 1. Безопасная проверка сырых строк
     if 'toc_lines' in locals() and toc_lines:
-        st.write(f"**Всего сырых строк найдено в зоне TOC:** {len(toc_lines)}")
-        with st.expander("Посмотреть все сырые строки из зоны Содержания"):
+        st.write(f"**Всего строк найдено в зоне TOC:** {len(toc_lines)}")
+        with st.expander("Посмотреть строки Содержания"):
             for idx, p in enumerate(toc_lines):
                 st.text(f"Строка {idx+1}: {repr(p.text)}")
-    elif 'toc_paragraphs' in locals() and toc_paragraphs:
-        st.write(f"**Всего сырых строк найдено в зоне TOC (переменная toc_paragraphs):** {len(toc_paragraphs)}")
-        with st.expander("Посмотреть все сырые строки"):
-            for idx, p in enumerate(toc_paragraphs):
-                st.text(f"Строка {idx+1}: {repr(p.text)}")
-    else:
-        st.warning("⚠️ Переменная строк оглавления (toc_lines/toc_paragraphs) пуста или не найдена.")
-
-    # 2. Безопасная проверка распознанных пунктов
+    
     if 'toc_entries' in locals() and toc_entries:
-        st.write(f"**Успешно распознано пунктов оглавления (toc_entries):** {len(toc_entries)}")
-        with st.expander("Посмотреть распознанные пункты"):
+        st.write(f"**Успешно распознано пунктов (toc_entries):** {len(toc_entries)}")
+        with st.expander("Посмотреть распознанные пункты оглавления"):
             for entry in toc_entries:
                 st.code(str(entry))
     else:
-        st.warning("⚠️ Список toc_entries пуст. Ни одна строка содержания не распозналась.")
+        st.warning("⚠️ Список toc_entries пуст.")
         
-    # 3. БЕЗОПАСНЫЙ вывод заголовков из тела (исправляет падение ValueError)
     if 'doc_headers' in locals() and doc_headers:
-        st.write(f"**Найденные заголовки в теле документа (для сверки):** {len(doc_headers)}")
-        with st.expander("Посмотреть заголовки из тела документа"):
+        st.write(f"**Найденные заголовки в теле документа:** {len(doc_headers)}")
+        with st.expander("Посмотреть заголовки из тела"):
             for idx, h_item in enumerate(doc_headers):
                 st.text(f"Заголовок {idx+1}: {repr(h_item)}")
-    else:
-        st.warning("⚠️ Список doc_headers пуст.")
     st.markdown("---")
     # ==============================================================================
    
