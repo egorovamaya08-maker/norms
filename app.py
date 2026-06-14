@@ -1063,9 +1063,11 @@ def check_toc(doc, start_idx):
     errors = []
     body_elems = list(doc.element.body)
     
-    # 1. Поиск заголовка "СОДЕРЖАНИЕ"
+        # Расширенный поиск заголовка "СОДЕРЖАНИЕ"
     toc_header_idx = None
     toc_header_para = None
+    
+    # 1. Ищем точное совпадение
     for i, p in enumerate(doc.paragraphs):
         txt = p.text.strip()
         if txt.upper() in ["СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ"]:
@@ -1073,9 +1075,21 @@ def check_toc(doc, start_idx):
             toc_header_para = p
             break
     
+    # 2. Если не нашли, ищем абзац, содержащий слово "СОДЕРЖАНИЕ" до начала введения
+    if toc_header_idx is None:
+        for i, p in enumerate(doc.paragraphs):
+            txt = p.text.strip().upper()
+            if "СОДЕРЖАНИЕ" in txt or "ОГЛАВЛЕНИЕ" in txt:
+                # Проверяем, что этот абзац находится до начала основной части документа
+                if i < start_idx:
+                    toc_header_idx = i
+                    toc_header_para = p
+                    break
+    
     if toc_header_idx is None:
         errors.append("Содержание – отсутствует заголовок «СОДЕРЖАНИЕ»")
         return errors
+
     
     # Проверка заголовка "СОДЕРЖАНИЕ"
     header_text = toc_header_para.text.strip()
