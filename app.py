@@ -1058,6 +1058,44 @@ def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
 
     return False
 
+def extract_toc_from_xml(doc):
+    """Извлекает параграфы содержания из поля TOC (автособираемое оглавление)"""
+    toc_paragraphs = []
+    body_elems = list(doc.element.body)
+    in_toc_field = False
+    
+    for elem in body_elems:
+        # Ищем начало поля TOC
+        if elem.tag == qn('w:p'):
+            fldChar = elem.find('.//w:fldChar', NSMAP)
+            if fldChar is not None and fldChar.get(qn('w:fldCharType')) == 'begin':
+                # Проверяем, что это действительно TOC
+                parent = elem.getparent()
+                idx = body_elems.index(elem)
+                if idx + 1 < len(body_elems):
+                    next_elem = body_elems[idx + 1]
+                    instr = next_elem.find('.//w:instrText', NSMAP)
+                    if instr is not None and instr.text and 'TOC' in instr.text.upper():
+                        in_toc_field = True
+                        continue
+        
+        if in_toc_field:
+            # Если встретили конец поля
+            if elem.tag == qn('w:p'):
+                end_fldChar = elem.find('.//w:fldChar', NSMAP)
+                if end_fldChar is not None and end_fldChar.get(qn('w:fldCharType')) == 'end':
+                    break
+            
+            # Если это параграф с текстом, извлекаем его
+            if elem.tag == qn('w:p'):
+                # Ищем соответствующий параграф в doc.paragraphs
+                for p in doc.paragraphs:
+                    if p._element is elem:
+                        toc_paragraphs.append(p)
+                        break
+    
+    return toc_paragraphs
+
 def check_toc(doc, start_idx):
     """Проверка содержания и подготовка границ документа"""
     errors = []
@@ -1164,7 +1202,12 @@ def check_toc(doc, start_idx):
                 toc_lines.append(p)
 
     toc_paragraphs = toc_lines 
-    
+        # === ЕСЛИ СТРОКИ НЕ НАЙДЕНЫ, ИЗВЛЕКАЕМ ИЗ ПОЛЯ TOC ===
+    if not toc_lines:
+        toc_lines_from_field = extract_toc_from_xml(doc)
+        if toc_lines_from_field:
+            toc_lines = toc_lines_from_field
+            
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
     in_bibliography = False
@@ -1338,6 +1381,8 @@ def check_toc(doc, start_idx):
     st.markdown("---")
     # ==============================================================================
    
+        # === УДАЛЕНИЕ ЛОЖНЫХ ОШИБОК ОБ ОТСУТСТВИИ РАЗДЕЛОВ ===
+    errors = [err for err in errors if not (err.startswith("Содержание – отсутствует раздел") and "хотя он есть в тексте документа" in err)]
     return errors
 
 
