@@ -1418,7 +1418,48 @@ def check_toc(doc, start_idx):
             doc_headers.append(('special', txt.upper(), txt, False))
     
     # === 4. Парсинг собранных строк оглавления ===
+        # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
+    
+    # ========== НОВАЯ ЛОГИКА ==========
+    # Сначала пробуем улучшенный XML-метод
+    toc_entries = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
+    
+    # Если не сработало, используем старый метод
+    if not toc_entries:
+        for p in toc_lines:
+            txt = p.text.strip()
+            
+            # Жесткий фильтр мусора и длинных фраз рецензентов
+            if len(txt) > 150 or txt.startswith('•') or txt.startswith('-') or len(txt.split()) > 12:
+                continue
+                
+            page_match = re.search(r'(\d+)$', txt)
+            if page_match:
+                page_num = page_match.group(1)
+                content = txt[:page_match.start()].strip()
+                content = re.sub(r'[.\s\t]+$', '', content).strip()
+            else:
+                # Номера страницы нет — возможно, это автооглавление без номеров
+                page_num = "?"
+                content = txt
+                # Проверяем, похоже ли на пункт оглавления
+                if not (re.match(r'^\d+(\.\d+)*\s+', content) or 
+                        content.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]):
+                    continue
+            
+            num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
+            if num_match:
+                num = num_match.group(1)
+                title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
+                level = '1' if '.' not in num else '2'
+                if len(num.split('.')) > 2:
+                    continue 
+                toc_entries.append((num, title, page_num, level))
+            else:
+                if content.strip():
+                    toc_entries.append((None, content, page_num, 'special'))
+    # ========== КОНЕЦ НОВОЙ ЛОГИКИ ==========
     for p in toc_lines:
         txt = p.text.strip()
         
