@@ -1472,78 +1472,31 @@ def check_toc(doc, start_idx):
         })
     
     
+        # ВЫВОДИМ ТАБЛИЦУ
     if table_data:
+        # CSS для переноса текста в st.dataframe
+        st.markdown("""
+        <style>
+        div[data-testid="stDataFrame"] div[data-testid="stElementToolbar"] {
+            display: none;
+        }
+        div[data-testid="stDataFrame"] .dataframe td {
+            white-space: pre-wrap !important;
+            word-wrap: break-word !important;
+        }
+        div[data-testid="stDataFrame"] .dataframe {
+            width: 100%;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
         st.dataframe(
             table_data, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Статус / Рекомендация": st.column_config.TextColumn("Статус / Рекомендация", width="medium"),
-                "Содержание": st.column_config.TextColumn("Содержание", width="large"),
-                "В тексте документа": st.column_config.TextColumn("В тексте документа", width="large")
-            }
+            use_container_width=True,
+            hide_index=True
         )
     else:
         st.info("Не найдено элементов оглавления для отображения")
-
-        # ==============================================================================
-    # ОТОБРАЖЕНИЕ ТАБЛИЦЫ С ПЕРЕНОСОМ ТЕКСТА
-    # ==============================================================================
-    
-    if table_data:
-        # CSS для переноса текста в таблице
-        st.markdown("""
-        <style>
-        .toc-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-family: sans-serif;
-            margin-bottom: 20px;
-        }
-        .toc-table th, .toc-table td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-            vertical-align: top;
-        }
-        .toc-table th {
-            background-color: #f2f2f2;
-            font-weight: bold;
-        }
-        .toc-table td {
-            white-space: normal;
-            word-wrap: break-word;
-            word-break: break-word;
-        }
-        </style>
-        <table class="toc-table">
-        <thead>
-        <tr>
-            <th>Статус / Рекомендация</th>
-            <th>Содержание</th>
-            <th>В тексте документа</th>
-        </tr>
-        </thead>
-        <tbody>
-        """, unsafe_allow_html=True)
-        
-        for row in table_data:
-            st.markdown(f"""
-            <tr>
-                <td>{row["Статус / Рекомендация"]}</td>
-                <td>{row["Содержание"]}</td>
-                <td>{row["В тексте документа"]}</td>
-            </tr>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("""
-        </tbody>
-        </table>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("Не найдено элементов оглавления для отображения")
-    
-    # ==============================================================================
 
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
