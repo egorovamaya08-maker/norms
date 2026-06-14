@@ -1472,28 +1472,39 @@ def check_toc(doc, start_idx):
         })
     
     
-        # ВЫВОДИМ ТАБЛИЦУ
+            # ВЫВОДИМ ТАБЛИЦУ С ПЕРЕНОсОМ ТЕКСТА
     if table_data:
-        # CSS для переноса текста в st.dataframe
+        # Применяем CSS для переноса текста в таблице
         st.markdown("""
         <style>
-        div[data-testid="stDataFrame"] div[data-testid="stElementToolbar"] {
-            display: none;
-        }
-        div[data-testid="stDataFrame"] .dataframe td {
-            white-space: pre-wrap !important;
-            word-wrap: break-word !important;
-        }
-        div[data-testid="stDataFrame"] .dataframe {
+        .stDataFrame {
             width: 100%;
+        }
+        .stDataFrame div[data-testid="stDataFrame"] table {
+            width: 100%;
+            table-layout: fixed;
+        }
+        .stDataFrame td {
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            word-break: break-word !important;
+        }
+        .stDataFrame th {
+            white-space: normal !important;
+            word-wrap: break-word !important;
         }
         </style>
         """, unsafe_allow_html=True)
         
         st.dataframe(
             table_data, 
-            use_container_width=True,
-            hide_index=True
+            use_container_width=True,  # Растягивает на всю ширину
+            hide_index=True,
+            column_config={
+                "Статус / Рекомендация": st.column_config.TextColumn("Статус / Рекомендация", width="small"),
+                "Содержание": st.column_config.TextColumn("Содержание", width="large"),
+                "В тексте документа": st.column_config.TextColumn("В тексте документа", width="large")
+            }
         )
     else:
         st.info("Не найдено элементов оглавления для отображения")
