@@ -1446,9 +1446,9 @@ def check_toc(doc, start_idx):
                     
         table_data.append({
             "Содержание": toc_display,
-            "В тексте документа": found_text,
+            "В тексте文档": found_text,
             "Статус / Рекомендация": status_message
-        )
+        })
         
     # Выводим данные в формате интерактивной таблицы с границами на всю ширину
     if table_data:
