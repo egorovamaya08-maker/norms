@@ -1059,7 +1059,7 @@ def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
     return False
 
 def check_toc(doc, start_idx):
-    """Проверка содержания с учётом ваших требований"""
+    """Проверка содержания и подготовка границ документа"""
     errors = []
     body_elems = list(doc.element.body)
 
@@ -1067,6 +1067,7 @@ def check_toc(doc, start_idx):
     toc_header_idx = None
     toc_header_para = None
 
+    # Сначала ищем в абзацах
     for i, p in enumerate(doc.paragraphs):
         raw = "".join(node.text or "" for node in p._element.iter())
         clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
@@ -1075,201 +1076,194 @@ def check_toc(doc, start_idx):
             toc_header_para = p
             break
 
-    # Поиск внутри таблиц
+    # Если не нашли в абзацах — ищем в таблицах
     if toc_header_para is None:
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for p in cell.paragraphs:
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    for p_idx, p in enumerate(cell.paragraphs):
                         raw = "".join(node.text or "" for node in p._element.iter())
                         clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
                         if "СОДЕРЖАНИЕ" in clean or "ОГЛАВЛЕНИЕ" in clean:
                             toc_header_para = p
-                            toc_header_idx = len(doc.paragraphs) - 1  # fallback
+                            # Чтобы не ломать индексы основного текста, 
+                            # ставим индекс первого абзаца после этой таблицы
+                            toc_header_idx = 0 
                             break
-                    if toc_header_para:
-                        break
-                if toc_header_para:
-                    break
-            if toc_header_para:
-                break
+                    if toc_header_para: break
+                if toc_header_para: break
+            if toc_header_para: break
 
     if toc_header_para is None:
         errors.append("Содержание – отсутствует заголовок «СОДЕРЖАНИЕ»")
         return errors
 
-    # === Проверка оформления заголовка «СОДЕРЖАНИЕ» ===
+    # Проверка текста заголовка
     header_text = toc_header_para.text.strip()
     if header_text.upper() == "ОГЛАВЛЕНИЕ":
         errors.append("Содержание – замените «ОГЛАВЛЕНИЕ» на «СОДЕРЖАНИЕ»")
-
-    # ЗАГОЛОВОК ДОЛЖЕН БЫТЬ ПО ЦЕНТРУ
+    
+    # Выравнивание заголовка «СОДЕРЖАНИЕ» по центру
     if get_effective_alignment(toc_header_para) != WD_ALIGN_PARAGRAPH.CENTER:
         errors.append("Содержание – выровняйте заголовок «СОДЕРЖАНИЕ» по центру")
-
+    
+    # Размер шрифта заголовка
     font_sizes = get_font_size_pt(toc_header_para)
     if font_sizes and any(abs(s - 14) > 0.5 for s in font_sizes):
         errors.append("Содержание – установите размер шрифта 14 пт для заголовка")
-
-    first_line = get_effective_first_line_indent(toc_header_para)
-    if abs(first_line) > 0.1:
+    
+    # Отступы заголовка
+    if abs(get_effective_first_line_indent(toc_header_para)) > 0.1:
         errors.append("Содержание – уберите абзацный отступ у заголовка")
-    left_indent = get_effective_left_indent(toc_header_para)
-    if abs(left_indent) > 0.1:
+    if abs(get_effective_left_indent(toc_header_para)) > 0.1:
         errors.append("Содержание – уберите отступ слева у заголовка")
-
-    # Пустая строка после заголовка
-    if toc_header_idx is not None and toc_header_idx + 1 < len(doc.paragraphs):
+    
+    # Пустая строка после заголовка (только если заголовок в обычных абзацах)
+    if toc_header_idx > 0 and toc_header_idx + 1 < len(doc.paragraphs):
         next_para = doc.paragraphs[toc_header_idx + 1]
         if not is_empty_paragraph(next_para):
             errors.append("Содержание – добавьте пустую строку после заголовка")
-
-    # === 2. Проверка автособираемого содержания — перенесено в ручную проверку ===
-    errors.append("📋 Для проверки человеком: убедитесь, что содержание является автособираемым (поле TOC)")
-
-    # === 3. Сбор строк оглавления ===
+    
+    # Фраза для экспертной проверки человеком (в соответствии с форматом вашего app.py)
+    errors.append("📋 Для проверки человеком: Убедитесь визуально, что оглавление является автособираемым (поле TOC обновляется автоматически)")
+    
+    # === 2. Сбор строк оглавления ===
     toc_lines = []
-    start_search = toc_header_idx + 1 if toc_header_idx is not None else 0
-
+    # Если заголовок в таблице, строки оглавления ищем в той же таблице/абзацах вокруг
+    start_search = toc_header_idx + 1 if toc_header_idx > 0 else 0
+    
     for i in range(start_search, len(doc.paragraphs)):
         p = doc.paragraphs[i]
         txt = p.text.strip()
         if not txt:
             continue
-        # Останавливаемся перед основным текстом
-        if is_section_header(txt) or re.match(r'^\d+\.', txt):
+        
+        # Стоп-слово: если это реальный заголовок в тексте (без цифр страниц в конце)
+        if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
             break
-        if re.search(r'\d+$', txt):  # есть номер страницы
-            toc_lines.append(p)
-
-    # === 4. Сбор реальных разделов и подразделов из документа (только корректные) ===
+            
+        if not re.search(r'\d+$', txt):
+            continue
+        toc_lines.append(p)
+    
+    # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
-
+    in_bibliography = False
+    
     for i, p in enumerate(doc.paragraphs):
+        # Начинаем собирать заголовки только ПОСЛЕ оглавления (минимум после start_idx)
+        if i < start_idx:
+            continue
+            
         txt = p.text.strip()
         if not txt or has_page_number(txt):
             continue
-
-        norm_txt = normalize_text(txt)
-
-        # Специальные разделы
-        if norm_txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
-            doc_headers.append(('special', norm_txt.upper(), norm_txt, False))
+            
+        # Игнорируем всё, что идет внутри самого Списка литературы
+        if txt.upper() in ["СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"]:
+            doc_headers.append(('special', txt.upper(), txt, False))
+            in_bibliography = True
             continue
-
-        # Разделы 1 уровня
-        if re.match(r'^\d+\s+[А-ЯЁ]', norm_txt) or re.match(r'^\d+\.\s+[А-ЯЁ]', norm_txt):
-            num_match = re.match(r'^(\d+)[\.\s]', norm_txt)
+            
+        if in_bibliography:
+            continue
+            
+        # Разделы 1 уровня (например: "1 Литературный обзор")
+        if re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt):
+            num_match = re.match(r'^(\d+)[\.\s]', txt)
             if num_match:
                 num = num_match.group(1)
-                title = re.sub(r'^\d+[\.\s]*', '', norm_txt).strip()
+                title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
                 doc_headers.append(('1', num, title, False))
-
-        # Подразделы (1.1, 1.2 и т.д.)
-        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁ]', norm_txt):
-            num_match = re.match(r'^(\d+\.\d+)', norm_txt)
+        # Подразделы 2 уровня (например: "1.1 Методология")
+        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt):
+            num_match = re.match(r'^(\d+\.\d+)(?:\.\d+)*', txt)
             if num_match:
                 num = num_match.group(1)
                 if len(num.split('.')) <= 2:
-                    title = re.sub(r'^\d+\.\d+\s*', '', norm_txt).strip()
+                    title = re.sub(r'^\d+\.\d+\s*', '', txt).strip()
                     doc_headers.append(('2', num, title, True))
-
-    # === 5. Парсинг строк из оглавления (только корректные пункты) ===
+        # Специальные разделы
+        elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
+            doc_headers.append(('special', txt.upper(), txt, False))
+    
+    # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
     for p in toc_lines:
-        txt = p.text.strip()
+        txt = p.text
         page_match = re.search(r'(\d+)$', txt)
         if not page_match:
             continue
         page_num = page_match.group(1)
-        content = re.sub(r'[.\s]+$', '', txt[:page_match.start()].strip())
-
+        content = txt[:page_match.start()].strip()
+        content = re.sub(r'[.\s]+$', '', content).strip()
+        
         num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
         if num_match:
             num = num_match.group(1)
             title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
             level = '1' if '.' not in num else '2'
             if len(num.split('.')) > 2:
-                errors.append(f"Содержание – пункт «{num}» имеет недопустимую глубину")
-                continue
+                continue  # Пропускаем уровни 1.1.1
             toc_entries.append((num, title, page_num, level))
-        elif content.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+        else:
             toc_entries.append((None, content, page_num, 'special'))
-
-    # === 6. Сравнение (только по реальным разделам и подразделам) ===
-    doc_headers_by_num = {num: title for level, num, title, _ in doc_headers if level in ('1', '2')}
-    doc_headers_by_num.update({title: title for _, title, title2, _ in doc_headers if _ == 'special'})
-
-    # Проверяем только то, что есть в оглавлении
+    
+    # === 5. Сверка Содержания и Текста ===
+    doc_headers_by_num = {}
+    for level, num, title, is_sub in doc_headers:
+        if level in ('1', '2'):
+            doc_headers_by_num[num] = title
+        elif level == 'special':
+            doc_headers_by_num[title] = title  
+    
+    # Проверка: все ли пункты из Оглавления есть в тексте
     for num, title, page, level in toc_entries:
         key = num if num else title
         if key not in doc_headers_by_num:
-            # Пропускаем ложные срабатывания (список литературы и т.п.)
-            if any(word in title.lower() for word in ["url", "cyberleninka", "дата обращения"]):
-                continue
-            errors.append(f"Содержание – отсутствует раздел «{title}» в документе (возможно, лишний пункт)")
-
-    # Проверяем, что все важные разделы из документа есть в оглавлении
-    for level, num, title, is_sub in doc_headers:
-        if level == 'special' or level == '1' or level == '2':
-            key = num if level != 'special' else title
-            found = any(
-                (entry[0] == key or (entry[0] is None and entry[1].upper() == title.upper()))
-                for entry in toc_entries
-            )
-            if not found:
-                errors.append(f"Содержание – отсутствует раздел «{title}» (есть в документе)")
-
-
+            continue
+        expected_title = doc_headers_by_num[key]
+        if title.lower() != expected_title.lower():
+            if re.sub(r'^(\d+\.?)\s*', '', title).lower() != re.sub(r'^(\d+\.?)\s*', '', expected_title).lower():
+                errors.append(f"Содержание – заголовок «{title}» не соответствует заголовку в тексте («{expected_title}»)")
     
-    # 8. Проверка форматирования строк оглавления
+    # Проверка: все ли разделы из Текста внесены в Оглавление
+    for level, num, title, is_sub in doc_headers:
+        key = num if level in ('1', '2') else title
+        found = any((entry[0] == key or (entry[0] is None and entry[1].lower() == key.lower())) for entry in toc_entries)
+        if not found:
+            errors.append(f"Содержание – отсутствует раздел «{title}» (хотя он есть в тексте документа)")
+    
+    # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
         txt = p.text.strip()
-        if not txt:
-            continue
-        # Шрифт, размер
+        if not txt: continue
+        
         sizes = get_font_size_pt(p)
         if sizes and any(abs(s - 14) > 0.5 for s in sizes):
             errors.append("Содержание – установите размер шрифта 14 пт для всех строк")
             break
-        # Полужирный – не должно быть
         if is_paragraph_bold(p):
             errors.append("Содержание – уберите полужирное начертание")
             break
-        # Выравнивание по ширине
         if get_effective_alignment(p) != WD_ALIGN_PARAGRAPH.JUSTIFY:
             errors.append("Содержание – выровняйте строки по ширине")
             break
-        # Абзацный отступ 0
-        first_line = get_effective_first_line_indent(p)
-        if abs(first_line) > 0.1:
+        if abs(get_effective_first_line_indent(p)) > 0.1:
             errors.append("Содержание – уберите абзацный отступ")
             break
-        # Отступ слева 0
-        left_indent = get_effective_left_indent(p)
-        if abs(left_indent) > 0.1:
+        if abs(get_effective_left_indent(p)) > 0.1:
             errors.append("Содержание – уберите отступ слева")
             break
-        # Междустрочный интервал множитель 1.2
+            
         try:
             line_spacing = p.paragraph_format.line_spacing
-            if line_spacing:
-                # Если line_spacing_rule = MULTIPLE, то line_spacing = множитель
-                # Если line_spacing_rule = EXACTLY или другие, то сложнее
-                # Упрощённо: проверяем, что значение между 1.19 и 1.21
-                if hasattr(p.paragraph_format, 'line_spacing_rule'):
-                    if p.paragraph_format.line_spacing_rule == WD_LINE_SPACING.MULTIPLE:
-                        if abs(line_spacing - 1.2) > 0.05:
-                            errors.append("Содержание – установите междустрочный интервал множитель 1,2")
-                            break
-                else:
-                    # Если нет правила, но значение близко к 1.2
-                    if abs(line_spacing - 1.2) > 0.05:
-                        errors.append("Содержание – установите междустрочный интервал множитель 1,2")
-                        break
+            if line_spacing and abs(line_spacing - 1.2) > 0.05:
+                errors.append("Содержание – установите междустрочный интервал множитель 1,2")
+                break
         except:
             pass
-    
+            
     return errors
 
 
