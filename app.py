@@ -1220,6 +1220,22 @@ def check_word_document(file):
         elif re.match(r'^\d+(\.\d+)+\.?\s+', text):
             is_subsection = True
 
+        # Корректировка: подраздел не может быть разделом 1 уровня
+        if is_subsection:
+            is_level1 = False
+        
+        # Флаги для предудущих состояний
+        if is_level1 or is_subsection:
+            if is_level1:
+                prev_was_section_header = True
+                prev_was_subsection = False
+            else:
+                prev_was_subsection = True
+                prev_was_section_header = False
+        else:
+            prev_was_section_header = False
+            prev_was_subsection = False
+
         # Для подзаголовков: проверяем, что после нет пустой строки
         if is_subsection and idx + 1 < len(doc.paragraphs):
             next_p = doc.paragraphs[idx + 1]
