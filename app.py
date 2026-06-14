@@ -1470,28 +1470,28 @@ def check_toc(doc, start_idx):
             "Содержание": toc_display,
             "В тексте документа": found_text
         })
-    
-    
-     if table_data:
-            # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну
-            st.markdown("""
-            <style>
-            .stTable table {
-                width: 100% !important;
-                table-layout: fixed !important;
-            }
-            .stTable th, .stTable td {
-                width: 33.33% !important;
-                white-space: normal !important;
-                word-break: break-word !important;
-                vertical-align: top !important;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            st.table(table_data)
-        else:
-            st.info("Не найдено элементов оглавления для отображения")
+
+if table_data:
+        # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну
+        st.markdown("""
+        <style>
+        .stTable table {
+            width: 100% !important;
+            table-layout: fixed !important;
+        }
+        .stTable th, .stTable td {
+            width: 33.33% !important;
+            white-space: normal !important;
+            word-break: break-word !important;
+            vertical-align: top !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.table(table_data)
+    else:
+        st.info("Не найдено элементов оглавления для отображения")
+
 
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
