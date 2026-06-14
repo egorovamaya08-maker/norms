@@ -1059,39 +1059,44 @@ def has_proper_spacing_after_header(doc, header_idx: int) -> bool:
     return False
 
 def check_toc(doc, start_idx):
-    """Проверка автособираемого содержания — улучшенная версия"""
+    """Проверка автособираемого содержания — исправленная версия (ищет в таблицах)"""
     errors = []
     body_elems = list(doc.element.body)
 
-    # === 1. Улучшенный поиск заголовка "СОДЕРЖАНИЕ" ===
+    # === 1. Поиск заголовка «СОДЕРЖАНИЕ» (в абзацах И в таблицах) ===
     toc_header_idx = None
     toc_header_para = None
 
-    # Ищем в первых 100 абзацах + полный перебор
-    for i, p in enumerate(doc.paragraphs[:100]):
-        full_text = "".join(node.text or "" for node in p._element.iter())
-        clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', full_text.upper())  # убираем все пробелы/невидимки
-        
+    # Поиск по всем параграфам
+    for i, p in enumerate(doc.paragraphs):
+        raw = "".join(node.text or "" for node in p._element.iter())
+        clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
         if "СОДЕРЖАНИЕ" in clean or "ОГЛАВЛЕНИЕ" in clean:
             toc_header_idx = i
             toc_header_para = p
             break
 
-    # Если не нашли — ищем по XML в body (самый надёжный способ)
-    if toc_header_idx is None:
-        for i, elem in enumerate(body_elems):
-            if elem.tag == qn('w:p'):
-                full_text = "".join(node.text or "" for node in elem.iter() if node.text)
-                if re.search(r'СОДЕРЖАНИЕ|ОГЛАВЛЕНИЕ', full_text, re.IGNORECASE):
-                    # Находим соответствующий Paragraph
-                    for p_idx, p in enumerate(doc.paragraphs):
-                        if p._element is elem:
-                            toc_header_idx = p_idx
+    # Если не нашли — ищем в таблицах (самый частый случай для содержания)
+    if toc_header_para is None:
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    for p_idx, p in enumerate(cell.paragraphs):
+                        raw = "".join(node.text or "" for node in p._element.iter())
+                        clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
+                        if "СОДЕРЖАНИЕ" in clean or "ОГЛАВЛЕНИЕ" in clean:
                             toc_header_para = p
+                            # Находим глобальный индекс параграфа (примерно)
+                            toc_header_idx = len(doc.paragraphs) - 1  # fallback
                             break
+                    if toc_header_para:
+                        break
+                if toc_header_para:
                     break
+            if toc_header_para:
+                break
 
-    if toc_header_idx is None or toc_header_para is None:
+    if toc_header_para is None:
         errors.append("Содержание – отсутствует заголовок «СОДЕРЖАНИЕ»")
         return errors
 
