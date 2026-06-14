@@ -1367,7 +1367,10 @@ def check_toc(doc, start_idx):
     for entry in toc_entries:
         num = str(entry[0]).strip() if entry[0] else ""
         title = str(entry[1]).strip()
-        title = re.sub(r'\.{3,}', '', title).strip().rstrip('.')
+        # Агрессивная очистка от любых цепочек точек (2 и более подряд)
+        title = re.sub(r'\.{2,}', ' ', title)   # заменяем 2+ точек на пробел
+        title = re.sub(r'\s+', ' ', title).strip()  # сжимаем множественные пробелы
+        title = title.rstrip('.')   # убираем точку в конце, если осталась
 
         toc_display = f"{num} {title}".strip() if num else title
         found_text = "Не найдено"
