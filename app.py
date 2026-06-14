@@ -1328,7 +1328,50 @@ def check_toc(doc, start_idx):
             corrected_errors.append(err)
         errors = corrected_errors
 
-    
+    errors = [err for err in errors if not err.startswith("Содержание – отсутствует раздел")] #временно
+    # === ОТЛАДОЧНЫЙ ВЫВОД (временно) ===
+    st.write(f"DEBUG: toc_lines = {len(toc_lines)}")
+    if not toc_lines:
+        st.write("DEBUG: Строки оглавления не найдены. Проверьте, что содержание не внутри поля TOC.")
+
+        # === АЛЬТЕРНАТИВНЫЙ СБОР СТРОК ОГЛАВЛЕНИЯ (если основной не дал результатов) ===
+    if not toc_lines:
+        alt_toc_lines = []
+        start_search = toc_header_idx + 1 if toc_header_idx is not None else 0
+        for i in range(start_search, len(doc.paragraphs)):
+            p = doc.paragraphs[i]
+            txt = p.text.strip()
+            if not txt:
+                continue
+            # Останавливаемся, если встретили настоящий заголовок раздела
+            if txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.?\s+[А-Я]', txt):
+                break
+            # Если в строке есть цифра (вероятно, номер страницы) — считаем её строкой содержания
+            if re.search(r'\d', txt):
+                alt_toc_lines.append(p)
+        if alt_toc_lines:
+            toc_lines = alt_toc_lines
+            # Пересобираем toc_entries
+            toc_entries = []
+            for p in toc_lines:
+                txt = p.text
+                page_match = re.search(r'(\d+)$', txt)
+                if not page_match:
+                    continue
+                page_num = page_match.group(1)
+                content = txt[:page_match.start()].strip()
+                content = re.sub(r'[.\s]+$', '', content).strip()
+                num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
+                if num_match:
+                    num = num_match.group(1)
+                    title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
+                    level = '1' if '.' not in num else '2'
+                    if len(num.split('.')) <= 2:
+                        toc_entries.append((num, title, page_num, level))
+                else:
+                    toc_entries.append((None, content, page_num, 'special'))
+            st.write(f"DEBUG: Альтернативный сбор дал {len(toc_lines)} строк")
+   
     return errors
 
 
