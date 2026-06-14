@@ -211,47 +211,30 @@ def extract_toc_entries(doc, start_idx):
 
 # ========== ВСТАВИТЬ НОВУЮ ФУНКЦИЮ ЗДЕСЬ ==========
 
-# ========== ВСТАВИТЬ / ЗАМЕНИТЬ В ФАЙЛЕ ==========
+
 
 def extract_toc_entries_clean(doc, start_idx=0):
-    """Улучшенная версия: надёжная очистка от точек и номеров страниц"""
     toc_items = []
     body_element = doc.element.body
-    
     for hyperlink in body_element.xpath('.//w:hyperlink'):
         text_nodes = hyperlink.xpath('.//w:t')
-        if not text_nodes:
-            continue
+        if not text_nodes: continue
         full_text = "".join(node.text or "" for node in text_nodes).strip()
-        if not full_text or full_text.isdigit():
-            continue
+        if not full_text or full_text.isdigit(): continue
 
-        # === КРИТИЧЕСКАЯ ОЧИСТКА ===
-        clean_text = re.sub(r'\.{3,}', ' ', full_text)      # удаляем длинные цепочки точек
-        clean_text = re.sub(r'\s*\d+\s*$', '', clean_text) # удаляем номер страницы в конце
-        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-        clean_text = clean_text.rstrip('.')
-
-        if len(clean_text) < 3:
-            continue
+        clean_text = re.sub(r'\.{3,}', ' ', full_text)   # усиленная очистка
+        clean_text = re.sub(r'\s*\d+\s*$', '', clean_text)
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip().rstrip('.')
+        if len(clean_text) < 3: continue
 
         match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', clean_text)
         if match:
-            number = match.group(1).strip()
-            title = match.group(2).strip()
-            toc_items.append((number, title))
+            toc_items.append((match.group(1).strip(), match.group(2).strip()))
         else:
             toc_items.append((None, clean_text))
-
-    # Убираем дубли
+    # удаление дублей
     seen = set()
-    unique_items = []
-    for item in toc_items:
-        key = f"{item[0]}_{item[1]}" if item[0] else item[1]
-        if key not in seen:
-            seen.add(key)
-            unique_items.append(item)
-    return unique_items
+    return [item for item in toc_items if (key := f"{item[0]}_{item[1]}" if item[0] else item[1]) not in seen and not seen.add(key)]
             
 def is_dash_char(ch):
     code = ord(ch)
@@ -1166,7 +1149,6 @@ def check_toc(doc, start_idx):
     toc_header_idx = None
     toc_header_para = None
 
-    # Сначала ищем в абзацах
     for i, p in enumerate(doc.paragraphs):
         raw = "".join(node.text or "" for node in p._element.iter())
         clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
@@ -1175,7 +1157,6 @@ def check_toc(doc, start_idx):
             toc_header_para = p
             break
 
-    # Если не нашли в абзацах — ищем в таблицах
     if toc_header_para is None:
         for t_idx, table in enumerate(doc.tables):
             for r_idx, row in enumerate(table.rows):
@@ -1185,7 +1166,7 @@ def check_toc(doc, start_idx):
                         clean = re.sub(r'[\s\u00a0\u200b\ufeff]+', '', raw.upper())
                         if "СОДЕРЖАНИЕ" in clean or "ОГЛАВЛЕНИЕ" in clean:
                             toc_header_para = p
-                            toc_header_idx = 0 
+                            toc_header_idx = 0
                             break
                     if toc_header_para: break
                 if toc_header_para: break
@@ -1195,60 +1176,41 @@ def check_toc(doc, start_idx):
         errors.append("Содержание – отсутствует заголовок «СОДЕРЖАНИЕ»")
         return errors
 
-    # Проверка текста заголовка
+    # Проверки заголовка содержания
     header_text = toc_header_para.text.strip()
     if header_text.upper() == "ОГЛАВЛЕНИЕ":
         errors.append("Содержание – замените «ОГЛАВЛЕНИЕ» на «СОДЕРЖАНИЕ»")
-    
-    # Выравнивание заголовка «СОДЕРЖАНИЕ» по центру
     if get_effective_alignment(toc_header_para) != WD_ALIGN_PARAGRAPH.CENTER:
         errors.append("Содержание – выровняйте заголовок «СОДЕРЖАНИЕ» по центру")
-    
-    # Размер шрифта заголовка
     font_sizes = get_font_size_pt(toc_header_para)
     if font_sizes and any(abs(s - 14) > 0.5 for s in font_sizes):
         errors.append("Содержание – установите размер шрифта 14 пт для заголовка")
-    
-    # Отступы заголовка
-    if abs(get_effective_first_line_indent(toc_header_para)) > 0.1:
-        errors.append("Содержание – уберите абзацный отступ у заголовка")
-    if abs(get_effective_left_indent(toc_header_para)) > 0.1:
-        errors.append("Содержание – уберите отступ слева у заголовка")
-    
-    # Пустая строка после заголовка
-    if toc_header_idx > 0 and toc_header_idx + 1 < len(doc.paragraphs):
-        next_para = doc.paragraphs[toc_header_idx + 1]
-        if not is_empty_paragraph(next_para):
-            errors.append("Содержание – добавьте пустую строку после заголовка")
-    
-# === 2. Сбор строк оглавления ===
+    if abs(get_effective_first_line_indent(toc_header_para)) > 0.1 or abs(get_effective_left_indent(toc_header_para)) > 0.1:
+        errors.append("Содержание – уберите отступы у заголовка")
+    if toc_header_idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[toc_header_idx + 1]):
+        errors.append("Содержание – добавьте пустую строку после заголовка")
+
+    # === 2. Сбор строк оглавления ===
     toc_lines = []
     is_inside_toc_zone = False
     toc_title_found = False
 
-    # Шаг A: Пытаемся собрать строки внутри зоны автооглавления (по XML-тегам)
     for idx, p in enumerate(doc.paragraphs):
         txt = normalize_text(p.text)
-        
         if not toc_title_found and txt.upper() in ["СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ"]:
             toc_title_found = True
             is_inside_toc_zone = True
             continue
-            
         if is_inside_toc_zone:
-            # Граница выхода из содержания
-            if txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ"] or re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE) or re.match(r'^1\s+[А-ЯЁ]', txt):
+            if txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ"] or re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE):
                 is_inside_toc_zone = False
                 break
-                
             xml_text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
             p_text = xml_text if xml_text else p.text.strip()
-            
             if p_text.strip():
-                p.text = p_text  # Сохраняем текст в абзац для проверок
                 toc_lines.append(p)
-                
-    # Шаг B: Если зона автооглавления не сработала (оглавление обычным текстом), используем бэкап-поиск по цифрам в конце
+
+    # Запасные методы сбора (ваш существующий код)
     if not toc_lines:
         start_search = toc_header_idx + 1 if (toc_header_idx is not None and toc_header_idx > 0) else 0
         for i in range(start_search, len(doc.paragraphs)):
@@ -1256,43 +1218,29 @@ def check_toc(doc, start_idx):
             txt = p.text.strip()
             if not txt:
                 continue
-            # Стоп-слово: реальный заголовок в тексте без номера страницы
             if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
                 break
             if re.search(r'\d+$', txt):
                 toc_lines.append(p)
 
-    toc_paragraphs = toc_lines 
-        # === ЕСЛИ СТРОКИ НЕ НАЙДЕНЫ, ИЗВЛЕКАЕМ ИЗ ПОЛЯ TOC ===
-    if not toc_lines:
-        toc_lines_from_field = extract_toc_from_xml(doc)
-        if toc_lines_from_field:
-            toc_lines = toc_lines_from_field
-        # Метод 2: Если строк с номерами страниц не нашли — ищем строки, похожие на пункты оглавления
-    # (начинаются с цифр или являются спецразделами)
     if not toc_lines:
         for i in range(start_search, len(doc.paragraphs)):
             p = doc.paragraphs[i]
             txt = p.text.strip()
             if not txt:
                 continue
-            
-            # Стоп-слово
             if (txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ", "ЗАКЛЮЧЕНИЕ"] or 
                 re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE) or 
                 re.match(r'^1\s+[А-ЯЁ]', txt)):
                 break
-            
-            # Похоже на пункт оглавления: номер раздела или спецраздел
             if (re.match(r'^\d+(\.\d+)*\s+', txt) or 
                 txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]):
-                toc_lines.append(p)        
-        # Финальная попытка: прямое сканирование поля TOC во всём документе
+                toc_lines.append(p)
+
     if not toc_lines:
         toc_field_paragraphs = []
         body_elems = list(doc.element.body)
         in_toc = False
-        
         for elem in body_elems:
             if elem.tag == qn('w:p'):
                 fldChar = elem.find('.//w:fldChar', NSMAP)
@@ -1304,26 +1252,25 @@ def check_toc(doc, start_idx):
                         if instr is not None and instr.text and 'TOC' in instr.text.upper():
                             in_toc = True
                             continue
-                
                 if in_toc:
                     end_fldChar = elem.find('.//w:fldChar', NSMAP)
                     if end_fldChar is not None and end_fldChar.get(qn('w:fldCharType')) == 'end':
                         in_toc = False
                         continue
-                    
                     for p in doc.paragraphs:
                         if p._element is elem:
                             txt = p.text.strip()
                             if txt and len(txt) > 3:
                                 toc_field_paragraphs.append(p)
                             break
-        
         if toc_field_paragraphs:
             toc_lines = toc_field_paragraphs
             st.success(f"✅ Найдено {len(toc_lines)} строк через финальное сканирование поля TOC")
-       
-       
-    # === 3. Сбор заголовков из ТЕКСТА документа (исправленная версия) ===
+
+    # Улучшенная фильтрация
+    toc_lines = [p for p in toc_lines if len(normalize_text(p.text)) > 5]
+
+    # === 3. Сбор заголовков из текста документа (исправленная версия) ===
     doc_headers = []
     in_bibliography = False
     intro_end_idx = start_idx
@@ -1333,7 +1280,7 @@ def check_toc(doc, start_idx):
         txt = normalize_text(doc.paragraphs[i].text).strip()
         if not txt:
             continue
-        if is_section_header(txt) and not txt.rstrip('.').endswith('.'):  # не пункт списка
+        if is_section_header(txt) and not txt.rstrip('.').endswith('.'):
             intro_end_idx = i
             break
 
@@ -1348,16 +1295,18 @@ def check_toc(doc, start_idx):
         is_in_intro = (i < intro_end_idx)
 
         # Специальные разделы
-        if txt.upper() in {"СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"}:
+        if txt.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ",
+                          "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"}:
             doc_headers.append(('special', txt.upper(), txt, False))
-            in_bibliography = True
+            if "СПИСОК" in txt.upper():
+                in_bibliography = True
             continue
         if in_bibliography:
             continue
 
-        # === ИСПРАВЛЕНИЕ: фильтрация пунктов нумерованного списка во введении ===
+        # Фильтрация пунктов списка во введении
         if is_in_intro and re.match(r'^\d+\.\s', txt) and txt.rstrip().endswith('.'):
-            continue  # это пункт списка, а не заголовок
+            continue
 
         # Заголовки 1 уровня
         if is_section_header(txt) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
@@ -1372,34 +1321,28 @@ def check_toc(doc, start_idx):
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt).strip()
-                doc_headers.append(('2', num, title, True))  # уровень 2+
-    
-                           # === 4. Парсинг собранных строк оглавления ===
+                doc_headers.append(('2', num, title, True))
+
+    # === 4. Парсинг TOC (с усиленной очисткой) ===
     toc_entries = []
-    
-    # Используем улучшенный XML-метод
     toc_items = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
-    
+
     for number, title in toc_items:
+        title = re.sub(r'\.{3,}', ' ', title).strip().rstrip('.')
         if number:
             dot_count = number.count('.')
-            if dot_count == 0:
-                level = '1'
-            elif dot_count == 1:
-                level = '2'
-            else:
-                level = '3'
+            level = '1' if dot_count == 0 else '2' if dot_count == 1 else '3'
             toc_entries.append((number, title, "?", level))
         else:
             toc_entries.append((None, title, "?", 'special'))
-    
+
+    # Запасной парсинг из toc_lines
     if not toc_entries and toc_lines:
         for p in toc_lines:
-            txt = p.text.strip()
+            txt = re.sub(r'\.{3,}', ' ', normalize_text(p.text)).strip()
             if not txt or len(txt) > 150:
                 continue
             txt = re.sub(r'\s+\d+$', '', txt)
-            txt = re.sub(r'\.{2,}', ' ', txt)
             match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', txt)
             if match:
                 number = match.group(1)
@@ -1407,50 +1350,26 @@ def check_toc(doc, start_idx):
                 dot_count = number.count('.')
                 level = '1' if dot_count == 0 else '2' if dot_count == 1 else '3'
                 toc_entries.append((number, title, "?", level))
-            else:
-                clean = re.sub(r'\d+$', '', txt).strip()
-                if clean.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
-                    toc_entries.append((None, clean, "?", 'special'))
+            elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+                toc_entries.append((None, txt, "?", 'special'))
 
-# ==============================================================================
-    # ==============================================================================
-    # ТАБЛИЦА СОДЕРЖАНИЯ (ОБНОВЛЕННАЯ С ОЧИСТКОЙ ОТ ТОЧЕК И ФИЛЬТРАЦИЕЙ СПИСКОВ)
-    # ==============================================================================
-    
-    # 1. Безопасно строим словарь заголовков из текста документа
+    # === 5. Построение таблицы сравнения ===
     headers_in_text = {}
-    for header_item in doc_headers:
-        try:
-            if len(header_item) >= 3:
-                level, num, title = header_item[0], header_item[1], header_item[2]
-            else:
-                continue
-                
-            if level in ('1', '2') and num:
-                clean_num = str(num).strip('.')
-                # Очищаем заголовки из текста от возможных длинных хвостов из точек
-                clean_title = re.sub(r'\.{3,}', '', str(title)).strip()
-                headers_in_text[clean_num] = clean_title
-            elif level == 'special' and title:
-                clean_title = re.sub(r'\.{3,}', '', str(title)).strip()
-                headers_in_text[clean_title.upper()] = clean_title
-        except Exception:
-            continue
+    for item in doc_headers:
+        if item[0] == 'special':
+            headers_in_text[item[1].upper()] = item[2]
+        elif item[0] in ('1', '2') and item[1]:
+            clean_num = str(item[1]).strip('.')
+            clean_title = re.sub(r'\.{3,}', '', item[2]).strip()
+            headers_in_text[clean_num] = clean_title
 
-    # 2. Собираем данные для отображения
-        # 2. Собираем данные для таблицы
     table_data = []
-    headers_in_text = {str(item[1]).strip('.'): item[2] for item in doc_headers if item[0] in ('1','2')}
-
     for entry in toc_entries:
         num = str(entry[0]).strip() if entry[0] else ""
         title = str(entry[1]).strip()
-
-        # Дополнительная очистка
         title = re.sub(r'\.{3,}', '', title).strip().rstrip('.')
 
         toc_display = f"{num} {title}".strip() if num else title
-
         found_text = "Не найдено"
         status = "Не найдено"
 
@@ -1460,7 +1379,8 @@ def check_toc(doc, start_idx):
             actual = headers_in_text[clean_num]
             found_text = f"{clean_num}. {actual}"
             status = "Совпадает" if title.lower() == actual.lower() else "Несоответствие названия"
-        elif title.upper() in [k.upper() for k in headers_in_text]:
+        elif title.upper() in [k.upper() for k in headers_in_text if isinstance(k, str)]:
+            found_text = headers_in_text[title.upper()]
             status = "Совпадает"
 
         table_data.append({
@@ -1468,8 +1388,8 @@ def check_toc(doc, start_idx):
             "Содержание": toc_display,
             "В тексте документа": found_text
         })
-        
-    # 3. Выводим красивую HTML таблицу с новыми пропорциями колонок
+
+    # === Вывод таблицы (ваш существующий HTML-стиль) ===
     if table_data:
         st.markdown("""
         <style>
@@ -1507,21 +1427,17 @@ def check_toc(doc, start_idx):
         }
         </style>
         """, unsafe_allow_html=True)
-        
         st.table(table_data)
     else:
         st.info("Не найдено элементов оглавления для отображения")
 
-    
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
         txt = p.text.strip()
-        if not txt: continue
-        
-        # Пропускаем проверку стилей для отфильтрованного мусора
+        if not txt:
+            continue
         if len(txt) > 150 or txt.startswith('•') or len(txt.split()) > 12:
             continue
-            
         sizes = get_font_size_pt(p)
         if sizes and any(abs(s - 14) > 0.5 for s in sizes):
             errors.append("Содержание – установите размер шрифта 14 пт для всех строк")
@@ -1538,7 +1454,6 @@ def check_toc(doc, start_idx):
         if abs(get_effective_left_indent(p)) > 0.1:
             errors.append("Содержание – уберите отступ слева")
             break
-            
         try:
             line_spacing = p.paragraph_format.line_spacing
             if line_spacing and abs(line_spacing - 1.2) > 0.05:
@@ -1547,12 +1462,8 @@ def check_toc(doc, start_idx):
         except:
             pass
 
-   
-   
-        # === УДАЛЕНИЕ ЛОЖНЫХ ОШИБОК ОБ ОТСУТСТВИИ РАЗДЕЛОВ ===
     errors = [err for err in errors if not (err.startswith("Содержание – отсутствует раздел") and "хотя он есть в тексте документа" in err)]
     return errors
-
 
 # ------------------------------------------------------------
 # Главная проверка документа
