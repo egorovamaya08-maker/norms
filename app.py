@@ -1359,7 +1359,7 @@ def check_toc(doc, start_idx):
         elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
             doc_headers.append(('special', txt.upper(), txt, False))
     
-              # === 4. Парсинг собранных строк оглавления ===
+                           # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
     
     # Используем улучшенный XML-метод
@@ -1367,7 +1367,6 @@ def check_toc(doc, start_idx):
     
     for number, title in toc_items:
         if number:
-            # Определяем уровень: 1 если нет точек, 2 если есть одна точка, 3 если две и более
             dot_count = number.count('.')
             if dot_count == 0:
                 level = '1'
@@ -1377,20 +1376,15 @@ def check_toc(doc, start_idx):
                 level = '3'
             toc_entries.append((number, title, "?", level))
         else:
-            # Специальный раздел
             toc_entries.append((None, title, "?", 'special'))
     
-    # Если XML-метод не сработал, пробуем через обычные абзацы
     if not toc_entries and toc_lines:
         for p in toc_lines:
             txt = p.text.strip()
             if not txt or len(txt) > 150:
                 continue
-            
-            # Убираем номер страницы в конце
             txt = re.sub(r'\s+\d+$', '', txt)
             txt = re.sub(r'\.{2,}', ' ', txt)
-            
             match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', txt)
             if match:
                 number = match.group(1)
@@ -1399,16 +1393,16 @@ def check_toc(doc, start_idx):
                 level = '1' if dot_count == 0 else '2' if dot_count == 1 else '3'
                 toc_entries.append((number, title, "?", level))
             else:
-                # Очищаем от цифр страниц
                 clean = re.sub(r'\d+$', '', txt).strip()
                 if clean.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
                     toc_entries.append((None, clean, "?", 'special'))
-    
+
+
+        # ==============================================================================
+    # ТАБЛИЦА СРАВНЕНИЯ ОГЛАВЛЕНИЯ
     # ==============================================================================
-    # ТАБЛИЦА СОДЕРЖАНИЯ
-    # ==============================================================================
     
-    # Создаем словарь заголовков из текста для сопоставления
+    # Создаем словарь заголовков из текста
     headers_in_text = {}
     for level, num, title, is_sub in doc_headers:
         if level in ('1', '2'):
@@ -1416,57 +1410,135 @@ def check_toc(doc, start_idx):
         elif level == 'special':
             headers_in_text[title.upper()] = title
     
-    st.markdown("### 📚 Сравнение оглавления с заголовками в тексте")
-    st.markdown("---")
+    # Формируем HTML-таблицу
+    table_html = '''
+    <style>
+    .comparison-table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-bottom: 20px;
+        font-family: sans-serif;
+    }
+    .comparison-table th {
+        border: 1px solid #ddd;
+        padding: 10px;
+        text-align: center;
+        background-color: #f2f2f2;
+        font-weight: bold;
+    }
+    .comparison-table td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        vertical-align: top;
+    }
+    .comparison-table td:first-child {
+        width: 50%;
+    }
+    .comparison-table td:last-child {
+        width: 50%;
+    }
+    .match-good {
+        color: #2e7d32;
+    }
+    .match-warning {
+        color: #ed6c02;
+    }
+    .match-bad {
+        color: #d32f2f;
+    }
+    </style>
+    <table class="comparison-table">
+    <tr>
+        <th>Содержание</th>
+        <th>В тексте документа</th>
+    </tr>
+    '''
     
-    # Создаем две колонки для таблицы
-    col1, col2 = st.columns(2)
+    for entry in toc_entries:
+        num = entry[0]
+        title = entry[1]
+        
+        # Форматируем строку содержания
+        if num:
+            toc_cell = f"{num} {title}"
+        else:
+            toc_cell = title
+        
+        # Ищем соответствующий заголовок в тексте
+        found_num = None
+        found_title = None
+        match_type = None
+        
+        if num and num in headers_in_text:
+            found_title = headers_in_text[num]
+            found_num = num
+            if title.lower() == found_title.lower():
+                match_type = "good"
+            else:
+                match_type = "warning"
+        elif not num and title.upper() in headers_in_text:
+            found_title = headers_in_text[title.upper()]
+            if title.upper() == found_title.upper():
+                match_type = "good"
+            else:
+                match_type = "warning"
+        else:
+            match_type = "bad"
+        
+        # Форматируем ячейку "В тексте"
+        if match_type == "good":
+            text_cell = f'<span class="match-good">{found_num + " " if found_num else ""}{found_title}</span>'
+        elif match_type == "warning":
+            # Генерируем конкретное сообщение о несоответствии
+            diff_msg = ""
+            if num and found_title:
+                # Проверяем конкретные различия
+                if title.lower() != found_title.lower():
+                    if found_title.endswith('.'):
+                        diff_msg = " - Удалите точку в конце"
+                    elif not num.endswith('.'):
+                        diff_msg = " - Добавьте точку в номере"
+                    else:
+                        diff_msg = " - Название отличается"
+            text_cell = f'<span class="match-warning">{found_num + " " if found_num else ""}{found_title}{diff_msg}</span>'
+        else:
+            text_cell = '<span class="match-bad">Не найдено</span>'
+        
+        table_html += f'''
+        <tr>
+            <td>{toc_cell}</td>
+            <td>{text_cell}</td>
+        </tr>
+        '''
     
-    with col1:
-        st.markdown("**📖 Содержание**")
+    # Добавляем заголовки из текста, которых нет в содержании
+    for level, num, title, is_sub in doc_headers:
+        found = False
         for entry in toc_entries:
-            num = entry[0]
-            title = entry[1]
+            entry_num = entry[0]
+            entry_title = entry[1]
+            if (num and entry_num == num) or (not num and entry_title.upper() == title.upper()):
+                found = True
+                break
+        if not found:
             if num:
-                st.write(f"**{num}** {title}")
+                toc_cell = '<span class="match-bad">Отсутствует</span>'
+                text_cell = f'<span class="match-warning">{num} {title}</span>'
             else:
-                st.write(f"**{title}**")
+                toc_cell = '<span class="match-bad">Отсутствует</span>'
+                text_cell = f'<span class="match-warning">{title}</span>'
+            table_html += f'''
+            <tr>
+                <td>{toc_cell}</td>
+                <td>{text_cell}</td>
+            </tr>
+            '''
     
-    with col2:
-        st.markdown("**📄 В тексте документа**")
-        for entry in toc_entries:
-            num = entry[0]
-            title = entry[1]
-            
-            # Ищем соответствующий заголовок в тексте
-            found_text = "❌ Не найдено"
-            if num and num in headers_in_text:
-                found_text = f"{num} {headers_in_text[num]}"
-            elif not num and title.upper() in headers_in_text:
-                found_text = headers_in_text[title.upper()]
-            else:
-                # Пробуем найти по частичному совпадению
-                for key, value in headers_in_text.items():
-                    if title.lower() in value.lower() or value.lower() in title.lower():
-                        found_text = f"🔍 {value} (возможно)"
-                        break
-            
-            # Проверяем точное совпадение
-            if num and num in headers_in_text:
-                if title.lower() == headers_in_text[num].lower():
-                    st.write(f"✅ {found_text}")
-                else:
-                    st.write(f"⚠️ {found_text}")
-            elif not num and title.upper() in headers_in_text:
-                if title.upper() == headers_in_text[title.upper()].upper():
-                    st.write(f"✅ {found_text}")
-                else:
-                    st.write(f"⚠️ {found_text}")
-            else:
-                st.write(f"❌ {found_text}")
+    table_html += '</table>'
     
-    st.markdown("---")
-    st.caption("✅ — полное совпадение | ⚠️ — отличается | ❌ — не найдено | 🔍 — возможное совпадение")
+    # Выводим таблицу
+    st.markdown("### Оглавление")
+    st.markdown(table_html, unsafe_allow_html=True)
     
 
     # === 6. Проверка форматирования строк оглавления ===
