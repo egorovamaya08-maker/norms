@@ -1268,7 +1268,10 @@ def check_word_document(file):
             # Продолжение таблицы
             if is_table_continuation(norm_text):
                 first_line = get_effective_first_line_indent(p)
-                if abs(first_line) > 0.1:
+                # Если отступ не задан локально (унаследован из стиля), считаем его нулевым
+                if p.paragraph_format.first_line_indent is None:
+                    first_line = 0.0
+                if abs(first_line) > 0.3:
                     auto_issues.append(f"«{text[:50]}» – уберите абзацный отступ (должен быть 0 см)")
                 prev_para_empty = False
                 continue
