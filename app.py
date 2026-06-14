@@ -1472,40 +1472,27 @@ def check_toc(doc, start_idx):
         })
     
     
-            # ВЫВОДИМ ТАБЛИЦУ С ПЕРЕНОсОМ ТЕКСТА
-    if table_data:
-        # Применяем CSS для переноса текста в таблице
+ if table_data:
+        # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну 
+        # и корректно переносить длинные слова
         st.markdown("""
         <style>
-        .stDataFrame {
-            width: 100%;
+        /* Нацеливаемся на статическую таблицу Streamlit */
+        .stTable table {
+            width: 100% !important;
+            table-layout: fixed !important; /* Фиксированная сетка */
         }
-        .stDataFrame div[data-testid="stDataFrame"] table {
-            width: 100%;
-            table-layout: fixed;
-        }
-        .stDataFrame td {
-            white-space: normal !important;
-            word-wrap: break-word !important;
-            word-break: break-word !important;
-        }
-        .stDataFrame th {
-            white-space: normal !important;
-            word-wrap: break-word !important;
+        .stTable th, .stTable td {
+            width: 33.33% !important; /* Три колонки — строго по трети ширины */
+            white-space: normal !important; /* Разрешаем перенос строк */
+            word-break: break-word !important; /* Переносим длинные слова */
+            vertical-align: top !important; /* Текст прижат к верху ячейки */
         }
         </style>
         """, unsafe_allow_html=True)
         
-        st.dataframe(
-            table_data, 
-            use_container_width=True,  # Растягивает на всю ширину
-            hide_index=True,
-            column_config={
-                "Статус / Рекомендация": st.column_config.TextColumn("Статус / Рекомендация", width="small"),
-                "Содержание": st.column_config.TextColumn("Содержание", width="large"),
-                "В тексте документа": st.column_config.TextColumn("В тексте документа", width="large")
-            }
-        )
+        # Выводим как статическую HTML таблицу
+        st.table(table_data)
     else:
         st.info("Не найдено элементов оглавления для отображения")
 
@@ -2109,7 +2096,7 @@ if uploaded_file is not None:
     with st.spinner("Проверяем..."):
         results = check_word_document(uploaded_file)
     
-    st.subheader("Результаты проверки:")
+    st.subheader("Результаты проверки основного текста:")
     
     # Разделяем автоматические ошибки и ручные проверки
     manual_mode = False
