@@ -1471,7 +1471,7 @@ def check_toc(doc, start_idx):
             "В тексте документа": found_text
         })
 
-if table_data:
+    if table_data:
         # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну
         st.markdown("""
         <style>
