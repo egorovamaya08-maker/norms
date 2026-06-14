@@ -1207,7 +1207,25 @@ def check_toc(doc, start_idx):
         toc_lines_from_field = extract_toc_from_xml(doc)
         if toc_lines_from_field:
             toc_lines = toc_lines_from_field
+        # Метод 2: Если строк с номерами страниц не нашли — ищем строки, похожие на пункты оглавления
+    # (начинаются с цифр или являются спецразделами)
+    if not toc_lines:
+        for i in range(start_search, len(doc.paragraphs)):
+            p = doc.paragraphs[i]
+            txt = p.text.strip()
+            if not txt:
+                continue
             
+            # Стоп-слово
+            if (txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ", "ЗАКЛЮЧЕНИЕ"] or 
+                re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE) or 
+                re.match(r'^1\s+[А-ЯЁ]', txt)):
+                break
+            
+            # Похоже на пункт оглавления: номер раздела или спецраздел
+            if (re.match(r'^\d+(\.\d+)*\s+', txt) or 
+                txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]):
+                toc_lines.append(p)        
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
     in_bibliography = False
@@ -1265,6 +1283,14 @@ def check_toc(doc, start_idx):
             page_num = page_match.group(1)
             content = txt[:page_match.start()].strip()
             content = re.sub(r'[.\s\t]+$', '', content).strip()
+        else:
+            # Номера страницы нет — возможно, это автооглавление без номеров
+            page_num = "?"
+            content = txt
+            # Проверяем, похоже ли на пункт оглавления
+            if not (re.match(r'^\d+(\.\d+)*\s+', content) or 
+                    content.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]):
+                continue
         
         num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
         if num_match:
