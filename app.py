@@ -1398,103 +1398,138 @@ def check_toc(doc, start_idx):
                     toc_entries.append((None, clean, "?", 'special'))
 
 # ==============================================================================
-    # ТАБЛИЦА СОДЕРЖАНИЯ (ИСПРАВЛЕННАЯ ЛОГИКА СВЕРКИ)
+    # ==============================================================================
+    # ТАБЛИЦА СОДЕРЖАНИЯ (ОБНОВЛЕННАЯ С ОЧИСТКОЙ ОТ ТОЧЕК И ФИЛЬТРАЦИЕЙ СПИСКОВ)
     # ==============================================================================
     
-    # Построение словаря заголовков из текста документа для быстрого и гибкого поиска
+    # 1. Безопасно строим словарь заголовков из текста документа
     headers_in_text = {}
-    for level, num, title, is_sub in doc_headers:
-        if level in ('1', '2') and num:
-            # Очищаем номер от лишних точек на конце для стандартизации ключа (например, '1.1.' -> '1.1')
-            clean_num = num.strip('.')
-            headers_in_text[clean_num] = title.strip()
-        elif level == 'special' and title:
-            # Для специальных глав ключом делаем нормализованный верхний регистр
-            headers_in_text[title.strip().upper()] = title.strip()
-            
-    # Собираем данные для отображения в виде таблицы с границами
+    for header_item in doc_headers:
+        try:
+            if len(header_item) >= 3:
+                level, num, title = header_item[0], header_item[1], header_item[2]
+            else:
+                continue
+                
+            if level in ('1', '2') and num:
+                clean_num = str(num).strip('.')
+                # Очищаем заголовки из текста от возможных длинных хвостов из точек
+                clean_title = re.sub(r'\.{3,}', '', str(title)).strip()
+                headers_in_text[clean_num] = clean_title
+            elif level == 'special' and title:
+                clean_title = re.sub(r'\.{3,}', '', str(title)).strip()
+                headers_in_text[clean_title.upper()] = clean_title
+        except Exception:
+            continue
+
+    # 2. Собираем данные для отображения
     table_data = []
     
     for entry in toc_entries:
-        num = entry[0]
-        title = entry[1].strip() if entry[1] else ""
-        
-        # Форматируем отображение пункта из Содержания
-        toc_display = f"{num} {title}" if num else title
-        
-        # Дефолтные значения на случай, если соответствие не будет найдено
-        found_text = "Не найдено"
-        status_message = "Не найдено"
-        
-        # Очищаем номер из оглавления для сверки по ключу
-        clean_toc_num = num.strip('.') if num else None
-        
-        # 1. Поиск по номеру главы/параграфа
-        if clean_toc_num and clean_toc_num in headers_in_text:
-            actual_title = headers_in_text[clean_toc_num]
-            found_text = f"{num.strip('.')}. {actual_title}"
+        try:
+            num = str(entry[0]).strip() if (len(entry) > 0 and entry[0]) else ""
+            title = str(entry[1]).strip() if (len(entry) > 1 and entry[1]) else ""
             
-            # Проверяем совпадение текста (без учета регистра и пробелов на концах)
-            if title.lower().rstrip('.') == actual_title.lower().rstrip('.'):
-                status_message = "Совпадает"
-            else:
-                status_message = "Добавьте точку в номере и удалите точку в конце"
-                
-        # 2. Поиск для специальных разделов (Введение, Заключение и др.) без номеров
-        elif not clean_toc_num and title.upper() in headers_in_text:
-            actual_title = headers_in_text[title.upper()]
-            found_text = actual_title
+            # Условие: если в тексте есть 3 и более точек подряд — удаляем их подчистую
+            title = re.sub(r'\.{3,}', '', title).strip()
+            # Дополнительно убираем оставшиеся одиночные точки и цифры номеров страниц на конце строки
+            title = re.sub(r'\s+\d+$', '', title).strip()
+            title = title.rstrip('.')
             
-            if title.lower() == actual_title.lower():
-                status_message = "Совпадает"
-            else:
-                status_message = "Добавьте точку в номере и удалите точку в конце"
-                
-        # 3. Резервный поиск по частичному совпадению текста (если номера разъехались)
-        else:
-            for key, value in headers_in_text.items():
-                # Если название из оглавления содержится в заголовке текста или наоборот
-                if title.lower() in value.lower() or value.lower() in title.lower():
-                    # Формируем красивое отображение найденного текста в зависимости от типа ключа
-                    if key.replace('.', '').isdigit():
-                        found_text = f"{key}. {value}"
-                    else:
-                        found_text = value
-                        
+            toc_display = f"{num} {title}".strip() if num else title
+            
+            found_text = "Не найдено"
+            status_message = "Не найдено"
+            
+            clean_toc_num = num.strip('.') if num else ""
+            
+            # Исключаем ложные срабатывания списков задач из Введения:
+            # Если номер состоит всего из одной цифры (1, 2), но это не "1 Литературный обзор", 
+            # и в нашей базе заголовков такого точного совпадения нет — не берем ложный пункт
+            if clean_toc_num and clean_toc_num in headers_in_text:
+                actual_title = headers_in_text[clean_toc_num]
+                found_text = f"{clean_toc_num}. {actual_title}"
+                if title.lower() == actual_title.lower():
+                    status_message = "Совпадает"
+                else:
                     status_message = "Добавьте точку в номере и удалите точку в конце"
-                    break
                     
-        # Ставим "Статус / Рекомендация" на первое место в словаре, чтобы колонка была крайней левой
-        table_data.append({
-            "Статус / Рекомендация": status_message,
-            "Содержание": toc_display,
-            "В тексте документа": found_text
-        })
-
+            elif not clean_toc_num and title.upper() in headers_in_text:
+                actual_title = headers_in_text[title.upper()]
+                found_text = actual_title
+                if title.lower() == actual_title.lower():
+                    status_message = "Совпадает"
+                else:
+                    status_message = "Добавьте точку в номере и удалите точку в конце"
+                    
+            else:
+                # Резервный поиск по частичному совпадению текста
+                for key, value in headers_in_text.items():
+                    # Фильтруем слишком короткие строки, чтобы пункты списков (1., 2.) не привязывались к случайным параграфам
+                    if len(title) > 10 and (title.lower() in value.lower() or value.lower() in title.lower()):
+                        if key and key.replace('.', '').isdigit():
+                            found_text = f"{key}. {value}"
+                        else:
+                            found_text = value
+                        status_message = "Добавьте точку в номере и удалите точку в конце"
+                        break
+                        
+            table_data.append({
+                "Статус / Рекомендация": status_message,
+                "Содержание": toc_display,
+                "В тексте документа": found_text
+            })
+        except Exception:
+            table_data.append({
+                "Статус / Рекомендация": "Ошибка анализа строки",
+                "Содержание": "Ошибка чтения данных",
+                "В тексте документа": "Пропустите этот пункт"
+            })
+            
+    # 3. Выводим красивую HTML таблицу с новыми пропорциями колонок
     if table_data:
-        # Убираем старый CSS для st.table, так как возвращаемся к st.dataframe
-        st.dataframe(
-            table_data, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Статус / Рекомендация": st.column_config.TextColumn(
-                    "Статус / Рекомендация", 
-                    width="medium"
-                ),
-                "Содержание": st.column_config.TextColumn(
-                    "Содержание", 
-                    width="large"
-                ),
-                "В тексте документа": st.column_config.TextColumn(
-                    "В тексте документа", 
-                    width="large"
-                )
-            }
-        )
+        st.markdown("""
+        <style>
+        .stTable table {
+            width: 100% !important;
+            table-layout: fixed !important;
+            border-collapse: collapse !important;
+            border: 1px solid #e0e0e0 !important;
+            border-radius: 8px !important;
+        }
+        .stTable th:nth-child(1), .stTable td:nth-child(1) { width: 22% !important; }
+        .stTable th:nth-child(2), .stTable td:nth-child(2) { width: 39% !important; }
+        .stTable th:nth-child(3), .stTable td:nth-child(3) { width: 39% !important; }
+        
+        .stTable th {
+            background-color: #f8f9fa !important;
+            color: #333333 !important;
+            font-weight: 600 !important;
+            text-align: left !important;
+            padding: 12px 16px !important;
+            border-bottom: 2px solid #dee2e6 !important;
+        }
+        .stTable td {
+            padding: 12px 16px !important;
+            border-bottom: 1px solid #eeeeee !important;
+            vertical-align: top !important;
+            color: #444444 !important;
+            font-size: 14px !important;
+            line-height: 1.5 !important;
+            white-space: normal !important;
+            word-wrap: break-word !important;
+        }
+        .stTable tr:hover {
+            background-color: #fdfdfd !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.table(table_data)
     else:
         st.info("Не найдено элементов оглавления для отображения")
 
+    
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
         txt = p.text.strip()
