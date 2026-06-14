@@ -1397,148 +1397,62 @@ def check_toc(doc, start_idx):
                 if clean.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
                     toc_entries.append((None, clean, "?", 'special'))
 
-
-        # ==============================================================================
-    # ТАБЛИЦА СРАВНЕНИЯ ОГЛАВЛЕНИЯ
+# ==============================================================================
+    # ТАБЛИЦА СОДЕРЖАНИЯ (ОБНОВЛЕННАЯ: ТАБЛИЧНЫЙ ВИД БЕЗ ЭМОДЗИ И ЛЕГЕНДЫ)
     # ==============================================================================
     
-    # Создаем словарь заголовков из текста
+    # Создаем словарь заголовков из текста для сопоставления
     headers_in_text = {}
     for level, num, title, is_sub in doc_headers:
         if level in ('1', '2'):
             headers_in_text[num] = title
         elif level == 'special':
             headers_in_text[title.upper()] = title
-    
-    # Формируем HTML-таблицу
-    table_html = '''
-    <style>
-    .comparison-table {
-        border-collapse: collapse;
-        width: 100%;
-        margin-bottom: 20px;
-        font-family: sans-serif;
-    }
-    .comparison-table th {
-        border: 1px solid #ddd;
-        padding: 10px;
-        text-align: center;
-        background-color: #f2f2f2;
-        font-weight: bold;
-    }
-    .comparison-table td {
-        border: 1px solid #ddd;
-        padding: 8px;
-        vertical-align: top;
-    }
-    .comparison-table td:first-child {
-        width: 50%;
-    }
-    .comparison-table td:last-child {
-        width: 50%;
-    }
-    .match-good {
-        color: #2e7d32;
-    }
-    .match-warning {
-        color: #ed6c02;
-    }
-    .match-bad {
-        color: #d32f2f;
-    }
-    </style>
-    <table class="comparison-table">
-    <tr>
-        <th>Содержание</th>
-        <th>В тексте документа</th>
-    </tr>
-    '''
+            
+    # Собираем данные для отображения в виде таблицы с границами
+    table_data = []
     
     for entry in toc_entries:
         num = entry[0]
         title = entry[1]
         
-        # Форматируем строку содержания
-        if num:
-            toc_cell = f"{num} {title}"
-        else:
-            toc_cell = title
+        # Форматируем отображение пункта из Содержания
+        toc_display = f"{num} {title}" if num else title
         
         # Ищем соответствующий заголовок в тексте
-        found_num = None
-        found_title = None
-        match_type = None
+        found_text = "Не найдено"
+        status_message = "Не найдено"
         
         if num and num in headers_in_text:
-            found_title = headers_in_text[num]
-            found_num = num
-            if title.lower() == found_title.lower():
-                match_type = "good"
+            found_text = f"{num} {headers_in_text[num]}"
+            if title.lower() == headers_in_text[num].lower():
+                status_message = "Совпадает"
             else:
-                match_type = "warning"
+                # Специфическое сообщение для заголовков с разным форматированием точек
+                status_message = "Добавьте точку в номере и удалите точку в конце"
         elif not num and title.upper() in headers_in_text:
-            found_title = headers_in_text[title.upper()]
-            if title.upper() == found_title.upper():
-                match_type = "good"
+            found_text = headers_in_text[title.upper()]
+            if title.upper() == headers_in_text[title.upper()].upper():
+                status_message = "Совпадает"
             else:
-                match_type = "warning"
+                status_message = "Добавьте точку в номере и удалите точку в конце"
         else:
-            match_type = "bad"
+            # Пробуем найти по частичному совпадению
+            for key, value in headers_in_text.items():
+                if title.lower() in value.lower() or value.lower() in title.lower():
+                    found_text = f"{value}"
+                    status_message = "Добавьте точку в номере и удалите точку в конце"
+                    break
+                    
+        table_data.append({
+            "Содержание": toc_display,
+            "В тексте документа": found_text,
+            "Статус / Рекомендация": status_message
+        )
         
-        # Форматируем ячейку "В тексте"
-        if match_type == "good":
-            text_cell = f'<span class="match-good">{found_num + " " if found_num else ""}{found_title}</span>'
-        elif match_type == "warning":
-            # Генерируем конкретное сообщение о несоответствии
-            diff_msg = ""
-            if num and found_title:
-                # Проверяем конкретные различия
-                if title.lower() != found_title.lower():
-                    if found_title.endswith('.'):
-                        diff_msg = " - Удалите точку в конце"
-                    elif not num.endswith('.'):
-                        diff_msg = " - Добавьте точку в номере"
-                    else:
-                        diff_msg = " - Название отличается"
-            text_cell = f'<span class="match-warning">{found_num + " " if found_num else ""}{found_title}{diff_msg}</span>'
-        else:
-            text_cell = '<span class="match-bad">Не найдено</span>'
-        
-        table_html += f'''
-        <tr>
-            <td>{toc_cell}</td>
-            <td>{text_cell}</td>
-        </tr>
-        '''
-    
-    # Добавляем заголовки из текста, которых нет в содержании
-    for level, num, title, is_sub in doc_headers:
-        found = False
-        for entry in toc_entries:
-            entry_num = entry[0]
-            entry_title = entry[1]
-            if (num and entry_num == num) or (not num and entry_title.upper() == title.upper()):
-                found = True
-                break
-        if not found:
-            if num:
-                toc_cell = '<span class="match-bad">Отсутствует</span>'
-                text_cell = f'<span class="match-warning">{num} {title}</span>'
-            else:
-                toc_cell = '<span class="match-bad">Отсутствует</span>'
-                text_cell = f'<span class="match-warning">{title}</span>'
-            table_html += f'''
-            <tr>
-                <td>{toc_cell}</td>
-                <td>{text_cell}</td>
-            </tr>
-            '''
-    
-    table_html += '</table>'
-    
-    # Выводим таблицу
-    st.markdown("### Оглавление")
-    st.markdown(table_html, unsafe_allow_html=True)
+    # Выводим данные в формате интерактивной таблицы с границами на всю ширину
+    if table_data:
+        st.dataframe(table_data, use_container_width=True, hide_index=True)
     
 
     # === 6. Проверка форматирования строк оглавления ===
