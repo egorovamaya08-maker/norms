@@ -153,23 +153,39 @@ def is_all_caps(text):
         return False
     return clean_text == clean_text.upper()
 
-def is_section_header(text):
+def is_section_header(text, is_in_intro=False):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
     
+    # Специальные разделы
     if cleaned.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ"}:
         return True
+    
+    # Внутри введения - не считаем пункты списка заголовками
+    if is_in_intro:
+        # Если строка заканчивается на точку - это пункт списка, а не заголовок
+        if cleaned.rstrip().endswith('.'):
+            return False
+        # Если начинается с цифры и точки, но не содержит пробела после номера - возможно пункт списка
+        if re.match(r'^\d+\.\S', cleaned):
+            return False
+    
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
         return True
+    
     # Основной критерий: номер с точкой + заглавные буквы
     if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned):
+        # Дополнительная проверка: если строка заканчивается на точку - это НЕ заголовок главы
+        if cleaned.rstrip().endswith('.'):
+            return False
         clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
         if not clean_letters:
             return False
         upper_count = sum(1 for c in clean_letters if c.isupper())
         return upper_count >= len(clean_letters) * 0.8
-        # Заголовок без номера, написанный ЗАГЛАВНЫМИ БУКВАМИ
+    
+    # Заголовок без номера, написанный ЗАГЛАВНЫМИ БУКВАМИ
     only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
     if only_letters and len(only_letters) > 3 and only_letters == only_letters.upper():
         if '«' not in cleaned and '»' not in cleaned:
@@ -216,10 +232,12 @@ def extract_toc_entries_clean(doc, start_idx=0):
         if not full_text or full_text.isdigit():
             continue
         
-        # Очищаем от номеров страниц в конце
-        clean_text = re.sub(r'[\d\.]+$', '', full_text)  # убираем цифры в конце
-        clean_text = re.sub(r'\.{3,}', ' ', clean_text)   # заменяем 3+ точек на пробел
-        clean_text = clean_text.strip()
+                # Очищаем от номеров страниц в конце
+        clean_text = re.sub(r'\s*\d+$', '', full_text)  # убираем цифры в конце
+        clean_text = re.sub(r'\.{2,}', ' ', clean_text)   # заменяем 2+ точек на пробел
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        clean_text = clean_text.rstrip('.')  # убираем точку в конце
+            
         
         if not clean_text or len(clean_text) < 2:
             continue
@@ -1325,8 +1343,21 @@ def check_toc(doc, start_idx):
        
        
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
+       
     doc_headers = []
     in_bibliography = False
+    found_first_real_header = False  # Флаг: нашли ли уже настоящий раздел
+    
+    # Определяем, где заканчивается введение (ищем первый заголовок 1 уровня)
+    intro_end_idx = start_idx
+    for i in range(start_idx, len(doc.paragraphs)):
+        txt = doc.paragraphs[i].text.strip()
+        if not txt or has_page_number(txt):
+            continue
+        # Если нашли заголовок, который не является пунктом списка (не заканчивается на точку)
+        if re.match(r'^\d+\s+[А-ЯЁ]', txt) and not txt.rstrip().endswith('.'):
+            intro_end_idx = i
+            break
     
     for i, p in enumerate(doc.paragraphs):
         if i < start_idx:
@@ -1336,6 +1367,9 @@ def check_toc(doc, start_idx):
         if not txt or has_page_number(txt):
             continue
             
+        # Определяем, находимся ли мы внутри введения
+        is_in_intro = (i < intro_end_idx)
+            
         if txt.upper() in ["СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"]:
             doc_headers.append(('special', txt.upper(), txt, False))
             in_bibliography = True
@@ -1344,20 +1378,32 @@ def check_toc(doc, start_idx):
         if in_bibliography:
             continue
             
+        # Пропускаем пункты списка внутри введения (которые заканчиваются на точку)
+        if is_in_intro and txt.rstrip().endswith('.'):
+            continue
+            
         # Учитываем неразрывный пробел (\xa0) и табуляцию (\t)
         if (re.match(r'^\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.[\s\xa0\t]+[А-ЯЁа-яё]', txt)) and len(txt) < 100:
             num_match = re.match(r'^(\d+)[\.\s\xa0\t]', txt)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
+                # Если внутри введения и заголовок заканчивается на точку - пропускаем
+                if is_in_intro and title.rstrip().endswith('.'):
+                    continue
                 doc_headers.append(('1', num, title, False))
-        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt) and len(txt) < 100:
-            num_match = re.match(r'^(\d+\.\d+)(?:\.\d+)*', txt)
+        elif re.match(r'^\d+\.\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) and len(txt) < 100:
+            num_match = re.match(r'^(\d+\.\d+)[\s\xa0\t]+', txt)
             if num_match:
                 num = num_match.group(1)
-                if len(num.split('.')) <= 2:
-                    title = re.sub(r'^\d+\.\d+\s*', '', txt).strip()
-                    doc_headers.append(('2', num, title, True))
+                title = re.sub(r'^\d+\.\d+[\s\xa0\t]*', '', txt).strip()
+                doc_headers.append(('2', num, title, True))
+        elif re.match(r'^\d+\.\d+\.\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) and len(txt) < 100:
+            num_match = re.match(r'^(\d+\.\d+\.\d+)[\s\xa0\t]+', txt)
+            if num_match:
+                num = num_match.group(1)
+                title = re.sub(r'^\d+\.\d+\.\d+[\s\xa0\t]*', '', txt).strip()
+                doc_headers.append(('3', num, title, True))
         elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
             doc_headers.append(('special', txt.upper(), txt, False))
     
@@ -1436,7 +1482,14 @@ def check_toc(doc, start_idx):
             title = re.sub(r'\.{3,}', '', title).strip()
             title = re.sub(r'\s+\d+$', '', title).strip()
             title = title.rstrip('.')
-            
+
+                        # ОТЛАДКА: проверяем очистку
+            original = entry[1]
+            if '...' in original or '....' in original:
+                st.write(f"Оригинал: {repr(original)}")
+                st.write(f"Очищено: {repr(title)}")
+                st.write("---")
+                
             toc_display = f"{num} {title}".strip() if num else title
             
             found_text = "Не найдено"
