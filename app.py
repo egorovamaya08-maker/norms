@@ -1226,6 +1226,33 @@ def check_toc(doc, start_idx):
             if (re.match(r'^\d+(\.\d+)*\s+', txt) or 
                 txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]):
                 toc_lines.append(p)        
+    
+        # === ОТЛАДКА: выводим информацию о найденных строках ===
+    st.markdown("---")
+    st.markdown("### 🔍 Отладка сбора строк содержания")
+    st.write(f"**toc_header_idx:** {toc_header_idx}")
+    st.write(f"**start_search:** {start_search}")
+    st.write(f"**Всего строк найдено в toc_lines:** {len(toc_lines)}")
+    
+    if toc_lines:
+        with st.expander("Посмотреть найденные строки содержания"):
+            for idx, p in enumerate(toc_lines):
+                st.text(f"Строка {idx+1}: {repr(p.text[:100])}")
+    else:
+        st.warning("⚠️ toc_lines пуст — ни один метод не сработал")
+        # Покажем, что находится между заголовком СОДЕРЖАНИЕ и ВВЕДЕНИЕ
+        st.write("**Абзацы между СОДЕРЖАНИЕ и ВВЕДЕНИЕ:**")
+        count = 0
+        for i in range(start_search, min(start_search + 30, len(doc.paragraphs))):
+            txt = doc.paragraphs[i].text
+            if txt.strip():
+                st.text(f"Абзац {i}: {repr(txt[:100])}")
+                count += 1
+                if count > 15:
+                    st.text("... (показаны первые 15 непустых абзацев)")
+                    break
+    st.markdown("---")
+    
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
     in_bibliography = False
