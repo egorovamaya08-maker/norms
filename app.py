@@ -1272,14 +1272,7 @@ def check_toc(doc, start_idx):
             continue
             
         page_match = re.search(r'(\d+)$', txt)
-        if not page_match:
-            # Если это автооглавление (цифры страниц могут быть спрятаны в XML), но строка похожа на раздел:
-            if re.match(r'^\d+(\.\d+)*\s+', txt) or txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
-                page_num = "3"
-                content = txt
-            else:
-                continue
-        else:
+        if page_match:
             page_num = page_match.group(1)
             content = txt[:page_match.start()].strip()
             content = re.sub(r'[.\s\t]+$', '', content).strip()
