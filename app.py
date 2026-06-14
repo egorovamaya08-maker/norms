@@ -1167,14 +1167,14 @@ def check_toc(doc, start_idx):
             continue
             
         # Разделы 1 уровня (например: "1 Литературный обзор")
-        if re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt):
+        if (re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt)) and len(txt) < 150:
             num_match = re.match(r'^(\d+)[\.\s]', txt)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
                 doc_headers.append(('1', num, title, False))
         # Подразделы 2 уровня (например: "1.1 Методология")
-        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt):
+        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt) and len(txt) < 150:
             num_match = re.match(r'^(\d+\.\d+)(?:\.\d+)*', txt)
             if num_match:
                 num = num_match.group(1)
@@ -1324,10 +1324,10 @@ def check_word_document(file):
 
     # --- ПРОВЕРКА СОДЕРЖАНИЯ (должна быть первой) ---
     toc_errors = check_toc(doc, start_idx)
-    st.write(f"DEBUG: toc_errors = {toc_errors}")  # временно
+   # st.write(f"DEBUG: toc_errors = {toc_errors}")  # временно
     # Добавляем ошибки содержания в начало списка auto_issues
     auto_issues = toc_errors + auto_issues
-    st.write(f"DEBUG: auto_issues после содержания = {auto_issues}")  # временно
+    #st.write(f"DEBUG: auto_issues после содержания = {auto_issues}")  # временно
 
     
     # --- НУМЕРАЦИЯ СТРАНИЦ ---
