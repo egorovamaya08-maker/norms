@@ -248,15 +248,7 @@ def extract_toc_entries_clean(doc, start_idx=0):
         if key not in seen:
             seen.add(key)
             unique_items.append(item)
-            # Отладка: выводим первые 5 найденных строк
-        if toc_items:
-            st.write("**🔍 Найденные строки в XML (первые 5):**")
-            for i, (num, title) in enumerate(toc_items[:5]):
-                st.write(f"  {i+1}. Номер: {num}, Название: {title[:60]}")
-        else:
-            st.warning("⚠️ Не найдено гиперссылок с оглавлением в XML")
-    return unique_items
-
+            
 def is_dash_char(ch):
     code = ord(ch)
     if code in [0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015]:
@@ -1451,52 +1443,70 @@ def check_toc(doc, start_idx):
                 if clean.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
                     toc_entries.append((None, clean, "?", 'special'))
     
-    # Отладка
-    st.write(f"**Найдено элементов оглавления:** {len(toc_entries)}")
-    for entry in toc_entries:
-        st.text(f"  Номер: {entry[0]}, Название: {entry[1][:50]}, Уровень: {entry[3]}")
+    # ==============================================================================
+    # ТАБЛИЦА СОДЕРЖАНИЯ
+    # ==============================================================================
     
-    # === 5. Сверка Содержания и Текста ===
-    doc_headers_by_num = {}
+    # Создаем словарь заголовков из текста для сопоставления
+    headers_in_text = {}
     for level, num, title, is_sub in doc_headers:
         if level in ('1', '2'):
-            doc_headers_by_num[num] = title
+            headers_in_text[num] = title
         elif level == 'special':
-            doc_headers_by_num[title] = title  
-            
-    normalized_doc_headers = {}
-    for key, value in doc_headers_by_num.items():
-        norm_key = key.rstrip('.')
-        normalized_doc_headers[norm_key] = value
-    doc_headers_by_num = normalized_doc_headers
+            headers_in_text[title.upper()] = title
     
-    # Сверка 1: Все ли пункты из Оглавления присутствуют в самом тексте
-    for num, title, page, level in toc_entries:
-        key = num if num else title
-        key = key.rstrip('.')
-        if key not in doc_headers_by_num:
-            continue
-        expected_title = doc_headers_by_num[key]
-        if title.lower() != expected_title.lower():
-            if re.sub(r'^(\d+\.?)\s*', '', title).lower() != re.sub(r'^(\d+\.?)\s*', '', expected_title).lower():
-                errors.append(f"Содержание – заголовок «{title}» не соответствует заголовку в тексте («{expected_title}»)")
+    st.markdown("### 📚 Сравнение оглавления с заголовками в тексте")
+    st.markdown("---")
     
-    # Сверка 2: Все ли реальные разделы текста внесены в Оглавление
-    for level, num, title, is_sub in doc_headers:
-        key = num if level in ('1', '2') else title
-        key = key.rstrip('.')
-        
-        found = False
+    # Создаем две колонки для таблицы
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**📖 Содержание**")
         for entry in toc_entries:
-            entry_key = entry[0] if entry[0] else entry[1]
-            if entry_key:
-                entry_key = entry_key.rstrip('.')
-                if entry_key.lower() == key.lower():
-                    found = True
-                    break
-                    
-        if not found:
-            errors.append(f"Содержание – отсутствует раздел «{title}» (хотя он есть в тексте документа)")
+            num = entry[0]
+            title = entry[1]
+            if num:
+                st.write(f"**{num}** {title}")
+            else:
+                st.write(f"**{title}**")
+    
+    with col2:
+        st.markdown("**📄 В тексте документа**")
+        for entry in toc_entries:
+            num = entry[0]
+            title = entry[1]
+            
+            # Ищем соответствующий заголовок в тексте
+            found_text = "❌ Не найдено"
+            if num and num in headers_in_text:
+                found_text = f"{num} {headers_in_text[num]}"
+            elif not num and title.upper() in headers_in_text:
+                found_text = headers_in_text[title.upper()]
+            else:
+                # Пробуем найти по частичному совпадению
+                for key, value in headers_in_text.items():
+                    if title.lower() in value.lower() or value.lower() in title.lower():
+                        found_text = f"🔍 {value} (возможно)"
+                        break
+            
+            # Проверяем точное совпадение
+            if num and num in headers_in_text:
+                if title.lower() == headers_in_text[num].lower():
+                    st.write(f"✅ {found_text}")
+                else:
+                    st.write(f"⚠️ {found_text}")
+            elif not num and title.upper() in headers_in_text:
+                if title.upper() == headers_in_text[title.upper()].upper():
+                    st.write(f"✅ {found_text}")
+                else:
+                    st.write(f"⚠️ {found_text}")
+            else:
+                st.write(f"❌ {found_text}")
+    
+    st.markdown("---")
+    st.caption("✅ — полное совпадение | ⚠️ — отличается | ❌ — не найдено | 🔍 — возможное совпадение")
+    
 
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
@@ -1532,32 +1542,7 @@ def check_toc(doc, start_idx):
         except:
             pass
 
-    # ==============================================================================
-    # ТЕСТОВЫЙ БЛОК ОТЛАДКИ С ТЕКУЩИМИ ДАННЫМИ
-    # ==============================================================================
-    st.markdown("---")
-    st.markdown("### 🔍 Отладочная информация оглавления")
-    if 'toc_lines' in locals() and toc_lines:
-        st.write(f"**Всего строк найдено в зоне TOC:** {len(toc_lines)}")
-        with st.expander("Посмотреть строки Содержания"):
-            for idx, p in enumerate(toc_lines):
-                st.text(f"Строка {idx+1}: {repr(p.text)}")
-    
-    if 'toc_entries' in locals() and toc_entries:
-        st.write(f"**Успешно распознано пунктов (toc_entries):** {len(toc_entries)}")
-        with st.expander("Посмотреть распознанные пункты оглавления"):
-            for entry in toc_entries:
-                st.code(str(entry))
-    else:
-        st.warning("⚠️ Список toc_entries пуст.")
-        
-    if 'doc_headers' in locals() and doc_headers:
-        st.write(f"**Найденные заголовки в теле документа:** {len(doc_headers)}")
-        with st.expander("Посмотреть заголовки из тела"):
-            for idx, h_item in enumerate(doc_headers):
-                st.text(f"Заголовок {idx+1}: {repr(h_item)}")
-    st.markdown("---")
-    # ==============================================================================
+   
    
         # === УДАЛЕНИЕ ЛОЖНЫХ ОШИБОК ОБ ОТСУТСТВИИ РАЗДЕЛОВ ===
     errors = [err for err in errors if not (err.startswith("Содержание – отсутствует раздел") and "хотя он есть в тексте документа" in err)]
