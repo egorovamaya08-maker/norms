@@ -1126,7 +1126,39 @@ def check_toc(doc, start_idx):
     
       
     # === 2. Сбор строк оглавления ===
+    # === НАЧАЛО БЛОКА: Поиск и сбор строк Содержания ===
     toc_lines = []
+    is_inside_toc_zone = False
+    toc_title_found = False
+
+    for idx, p in enumerate(doc.paragraphs):
+        txt = normalize_text(p.text)
+        
+        # 1. Ловим начало зоны Содержания
+        if not toc_title_found and txt.upper() in ["СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ"]:
+            toc_title_found = True
+            is_inside_toc_zone = True
+            continue
+            
+        if is_inside_toc_zone:
+            # 2. Ловим конец зоны Содержания (Введение или Глава 1)
+            if txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ"] or re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE) or re.match(r'^1\s+[А-ЯЁ]', txt):
+                is_inside_toc_zone = False
+                break
+                
+            # Читаем текст, включая скрытые XML-элементы автооглавления
+            xml_text = "".join(node.text or "" for node in p._element.iter(qn('w:t'))).strip()
+            p_text = xml_text if xml_text else p.text.strip()
+            
+            # Если в строке есть хоть какой-то текст, временно сохраняем её оригинальный текст
+            if p_text.strip():
+                # Подменяем p.text для парсера, чтобы он видел скрытые поля как обычные строки
+                p.text = p_text
+                toc_lines.append(p)
+                
+    # Переприсваиваем переменную, чтобы тестовый блок её точно увидел
+    toc_paragraphs = toc_lines 
+    # === КОНЕЦ БЛОКА ===
     # Если заголовок в таблице, строки оглавления ищем в той же таблице/абзацах вокруг
     start_search = toc_header_idx + 1 if toc_header_idx > 0 else 0
     
