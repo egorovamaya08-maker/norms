@@ -157,6 +157,9 @@ def is_section_header(text):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
+    if is_intro_context and cleaned.rstrip().endswith('.'):
+        return False
+    
     if cleaned.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ"}:
         return True
     if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
@@ -217,7 +220,7 @@ def extract_toc_entries_clean(doc, start_idx=0):
         
         # Очищаем от номеров страниц в конце
         clean_text = re.sub(r'[\d\.]+$', '', full_text)  # убираем цифры в конце
-        clean_text = re.sub(r'\.{2,}', '', clean_text)   # убираем отточия
+        clean_text = re.sub(r'\.{3,}', ' ', clean_text)   # заменяем 3+ точек на пробел
         clean_text = clean_text.strip()
         
         if not clean_text or len(clean_text) < 2:
@@ -1343,8 +1346,9 @@ def check_toc(doc, start_idx):
         if in_bibliography:
             continue
             
-        if (re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt)) and len(txt) < 100:
-            num_match = re.match(r'^(\d+)[\.\s]', txt)
+        # Учитываем неразрывный пробел (\xa0) и табуляцию (\t)
+        if (re.match(r'^\d+[\s\xa0\t]+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.[\s\xa0\t]+[А-ЯЁа-яё]', txt)) and len(txt) < 100:
+            num_match = re.match(r'^(\d+)[\.\s\xa0\t]', txt)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
@@ -1595,7 +1599,14 @@ def check_word_document(file):
             intro_found = True
             start_idx = i
             break
+    for i, p in enumerate(doc.paragraphs):
+        if i < start_idx:
+            continue
+        # Если мы еще не вышли из введения (например, до первого реального раздела)
+        is_intro = (start_idx is not None and i < start_idx + 5)  # примерное определение
+        if is_section_header(txt, is_intro_context=is_intro):
 
+        
     # Если не нашли "ВВЕДЕНИЕ" — ищем любой раздел
     if not intro_found:
         for i, p in enumerate(doc.paragraphs):
