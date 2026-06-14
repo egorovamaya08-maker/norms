@@ -1398,83 +1398,79 @@ def check_toc(doc, start_idx):
                     toc_entries.append((None, clean, "?", 'special'))
 
 # ==============================================================================
-    # ТАБЛИЦА СОДЕРЖАНИЯ (ОБНОВЛЕННАЯ: ТАБЛИЧНЫЙ ВИД БЕЗ ЭМОДЗИ И ЛЕГЕНДЫ)
+# ==============================================================================
+    # ТАБЛИЦА СОДЕРЖАНИЯ (ИСПРАВЛЕННАЯ ЛОГИКА СВЕРКИ)
     # ==============================================================================
     
-    # Создаем словарь заголовков из текста для сопоставления
+    # Построение словаря заголовков из текста документа для быстрого и гибкого поиска
     headers_in_text = {}
     for level, num, title, is_sub in doc_headers:
-        if level in ('1', '2'):
-            headers_in_text[num] = title
-        elif level == 'special':
-            headers_in_text[title.upper()] = title
+        if level in ('1', '2') and num:
+            # Очищаем номер от лишних точек на конце для стандартизации ключа (например, '1.1.' -> '1.1')
+            clean_num = num.strip('.')
+            headers_in_text[clean_num] = title.strip()
+        elif level == 'special' and title:
+            # Для специальных глав ключом делаем нормализованный верхний регистр
+            headers_in_text[title.strip().upper()] = title.strip()
             
-# Собираем данные для отображения в виде таблицы с границами
+    # Собираем данные для отображения в виде таблицы с границами
     table_data = []
     
     for entry in toc_entries:
         num = entry[0]
-        title = entry[1]
+        title = entry[1].strip() if entry[1] else ""
         
         # Форматируем отображение пункта из Содержания
         toc_display = f"{num} {title}" if num else title
         
-        # Ищем соответствующий заголовок в тексте
+        # Дефолтные значения на случай, если соответствие не будет найдено
         found_text = "Не найдено"
         status_message = "Не найдено"
         
-        if num and num in headers_in_text:
-            found_text = f"{num} {headers_in_text[num]}"
-            if title.lower() == headers_in_text[num].lower():
+        # Очищаем номер из оглавления для сверки по ключу
+        clean_toc_num = num.strip('.') if num else None
+        
+        # 1. Поиск по номеру главы/параграфа
+        if clean_toc_num and clean_toc_num in headers_in_text:
+            actual_title = headers_in_text[clean_toc_num]
+            found_text = f"{num.strip('.')}. {actual_title}"
+            
+            # Проверяем совпадение текста (без учета регистра и пробелов на концах)
+            if title.lower().rstrip('.') == actual_title.lower().rstrip('.'):
                 status_message = "Совпадает"
             else:
-                # Специфическое сообщение для заголовков с разным форматированием точек
                 status_message = "Добавьте точку в номере и удалите точку в конце"
-        elif not num and title.upper() in headers_in_text:
-            found_text = headers_in_text[title.upper()]
-            if title.upper() == headers_in_text[title.upper()].upper():
+                
+        # 2. Поиск для специальных разделов (Введение, Заключение и др.) без номеров
+        elif not clean_toc_num and title.upper() in headers_in_text:
+            actual_title = headers_in_text[title.upper()]
+            found_text = actual_title
+            
+            if title.lower() == actual_title.lower():
                 status_message = "Совпадает"
             else:
                 status_message = "Добавьте точку в номере и удалите точку в конце"
+                
+        # 3. Резервный поиск по частичному совпадению текста (если номера разъехались)
         else:
-            # Пробуем найти по частичному совпадению
             for key, value in headers_in_text.items():
+                # Если название из оглавления содержится в заголовке текста или наоборот
                 if title.lower() in value.lower() or value.lower() in title.lower():
-                    found_text = f"{value}"
+                    # Формируем красивое отображение найденного текста в зависимости от типа ключа
+                    if key.replace('.', '').isdigit():
+                        found_text = f"{key}. {value}"
+                    else:
+                        found_text = value
+                        
                     status_message = "Добавьте точку в номере и удалите точку в конце"
                     break
                     
-        # Ставим "Статус / Рекомендация" на первое место в словаре
+        # Ставим "Статус / Рекомендация" на первое место в словаре, чтобы колонка была крайней левой
         table_data.append({
             "Статус / Рекомендация": status_message,
             "Содержание": toc_display,
             "В тексте документа": found_text
         })
-        
-    # Выводим данные в формате интерактивной таблицы с измененным порядком колонок
-    if table_data:
-        st.dataframe(
-            table_data, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Статус / Рекомендация": st.column_config.TextColumn(
-                    "Статус / Рекомендация",
-                    help="Результат сверки и указания к исправлению",
-                    width="large"
-                ),
-                "Содержание": st.column_config.TextColumn(
-                    "Содержание",
-                    help="Пункт, найденный в оглавлении",
-                    width="medium"
-                ),
-                "В тексте документа": st.column_config.TextColumn(
-                    "В тексте документа",
-                    help="Соответствующий заголовок из тела документа",
-                    width="medium"
-                )
-            }
-        )
     
 
     # === 6. Проверка форматирования строк оглавления ===
