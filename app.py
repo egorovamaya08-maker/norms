@@ -1472,28 +1472,26 @@ def check_toc(doc, start_idx):
         })
     
     
- if table_data:
-        st.dataframe(
-            table_data, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Статус / Рекомендация": st.column_config.TextColumn(
-                    "Статус / Рекомендация", 
-                    width="large" # Одинаковый размер для всех
-                ),
-                "Содержание": st.column_config.TextColumn(
-                    "Содержание", 
-                    width="large"
-                ),
-                "В тексте документа": st.column_config.TextColumn(
-                    "В тексте документа", 
-                    width="large"
-                )
+     if table_data:
+            # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну
+            st.markdown("""
+            <style>
+            .stTable table {
+                width: 100% !important;
+                table-layout: fixed !important;
             }
-        )
-    else:
-        st.info("Не найдено элементов оглавления для отображения")
+            .stTable th, .stTable td {
+                width: 33.33% !important;
+                white-space: normal !important;
+                word-break: break-word !important;
+                vertical-align: top !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.table(table_data)
+        else:
+            st.info("Не найдено элементов оглавления для отображения")
 
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
