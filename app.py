@@ -1122,11 +1122,12 @@ def check_toc(doc, start_idx):
         if not is_empty_paragraph(next_para):
             errors.append("Содержание – добавьте пустую строку после заголовка")
     
-    # === 2. Сбор строк оглавления ===
+# === 2. Сбор строк оглавления ===
     toc_lines = []
     is_inside_toc_zone = False
     toc_title_found = False
 
+    # Шаг A: Пытаемся собрать строки внутри зоны автооглавления (по XML-тегам)
     for idx, p in enumerate(doc.paragraphs):
         txt = normalize_text(p.text)
         
@@ -1136,6 +1137,7 @@ def check_toc(doc, start_idx):
             continue
             
         if is_inside_toc_zone:
+            # Граница выхода из содержания
             if txt.upper() in ["ВВЕДЕНИЕ", "ВВЕДЕНIЕ"] or re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', txt, re.IGNORECASE) or re.match(r'^1\s+[А-ЯЁ]', txt):
                 is_inside_toc_zone = False
                 break
@@ -1144,24 +1146,24 @@ def check_toc(doc, start_idx):
             p_text = xml_text if xml_text else p.text.strip()
             
             if p_text.strip():
-                # Подменяем текст, чтобы последующие проверки форматирования видели его корректно
-                p.text = p_text
+                p.text = p_text  # Сохраняем текст в абзац для проверок
                 toc_lines.append(p)
                 
-    toc_paragraphs = toc_lines 
-    
-    # Если XML-парсером ничего не нашлось, используем стандартный бэкап-цикл
+    # Шаг B: Если зона автооглавления не сработала (оглавление обычным текстом), используем бэкап-поиск по цифрам в конце
     if not toc_lines:
-        start_search = toc_header_idx + 1 if toc_header_idx > 0 else 0
+        start_search = toc_header_idx + 1 if (toc_header_idx is not None and toc_header_idx > 0) else 0
         for i in range(start_search, len(doc.paragraphs)):
             p = doc.paragraphs[i]
             txt = p.text.strip()
             if not txt:
                 continue
+            # Стоп-слово: реальный заголовок в тексте без номера страницы
             if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
                 break
             if re.search(r'\d+$', txt):
                 toc_lines.append(p)
+
+    toc_paragraphs = toc_lines 
     
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
@@ -1204,13 +1206,13 @@ def check_toc(doc, start_idx):
     for p in toc_lines:
         txt = p.text.strip()
         
-        # СТРОГАЯ ФИЛЬТРАЦИЯ: Полностью отсекаем списки и аномально длинные текстовые строки
+        # Жесткий фильтр мусора и длинных фраз рецензентов
         if len(txt) > 150 or txt.startswith('•') or txt.startswith('-') or len(txt.split()) > 12:
             continue
             
         page_match = re.search(r'(\d+)$', txt)
         if not page_match:
-            # Поддержка автооглавления: если цифра скрыта, но строка оформлена как раздел, берём её
+            # Если это автооглавление (цифры страниц могут быть спрятаны в XML), но строка похожа на раздел:
             if re.match(r'^\d+(\.\d+)*\s+', txt) or txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
                 page_num = "3"
                 content = txt
