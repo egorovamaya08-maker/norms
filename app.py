@@ -1297,7 +1297,7 @@ def check_word_document(file):
     # --- ПОИСК НАЧАЛА ОСНОВНОГО ТЕКСТА ---
     start_idx = None
     intro_found = False
-    auto_issues = []
+   # auto_issues = []
 
     # Ищем "ВВЕДЕНИЕ"
     for i, p in enumerate(doc.paragraphs):
