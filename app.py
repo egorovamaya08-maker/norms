@@ -1063,30 +1063,38 @@ def check_toc(doc, start_idx):
     errors = []
     body_elems = list(doc.element.body)
     
-        # Расширенный поиск заголовка "СОДЕРЖАНИЕ"
+    # =======================================================
+    # ВСТАВИТЬ СЮДА: НОВЫЙ БЛОК ПОИСКА ЗАГОЛОВКА
+    # =======================================================
     toc_header_idx = None
     toc_header_para = None
     
-    # 1. Ищем точное совпадение
-    for i, p in enumerate(doc.paragraphs):
-        txt = p.text.strip()
-        if txt.upper() in ["СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ"]:
+    # Ищем заголовок в первых 50 абзацах документа (без жесткой привязки к start_idx)
+    search_limit = min(len(doc.paragraphs), 50)
+    
+    for i, p in enumerate(doc.paragraphs[:search_limit]):
+        txt = p.text.strip().upper()
+        # Очищаем текст от спецсимволов и лишних пробелов, оставляем только буквы
+        # Это помогает найти заголовок, даже если внутри есть скрытые символы верстки
+        clean_txt = "".join(filter(str.isalpha, txt))
+        
+        if "СОДЕРЖАНИЕ" in clean_txt or "ОГЛАВЛЕНИЕ" in clean_txt:
             toc_header_idx = i
             toc_header_para = p
             break
-    
-    # 2. Если не нашли, ищем абзац, содержащий слово "СОДЕРЖАНИЕ" до начала введения
+            
+    # Дополнительная проверка: если не нашли в абзацах, ищем внутри таблиц 
+    # (иногда автособираемое оглавление помещается в невидимую таблицу)
     if toc_header_idx is None:
         for i, p in enumerate(doc.paragraphs):
-            txt = p.text.strip().upper()
-            if "СОДЕРЖАНИЕ" in txt or "ОГЛАВЛЕНИЕ" in txt:
-                # Проверяем, что этот абзац находится до начала основной части документа
-                if i < start_idx:
-                    toc_header_idx = i
-                    toc_header_para = p
-                    break
-    
-    if toc_header_idx is None:
+             # Используем регулярные выражения для гибкого поиска
+             import re
+             if re.search(r'(ОГЛАВЛЕНИЕ|СОДЕРЖАНИЕ)', p.text, re.IGNORECASE):
+                 toc_header_idx = i
+                 toc_header_para = p
+                 break
+
+    if toc_header_idx is None or toc_header_para is None:
         errors.append("Содержание – отсутствует заголовок «СОДЕРЖАНИЕ»")
         return errors
 
