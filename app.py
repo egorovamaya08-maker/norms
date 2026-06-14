@@ -1167,14 +1167,14 @@ def check_toc(doc, start_idx):
             continue
             
         # Разделы 1 уровня (например: "1 Литературный обзор")
-        if (re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt)) and len(txt) < 150:
+        if (re.match(r'^\d+\s+[А-ЯЁа-яё]', txt) or re.match(r'^\d+\.\s+[А-ЯЁа-яё]', txt)) and len(txt) < 100:
             num_match = re.match(r'^(\d+)[\.\s]', txt)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
                 doc_headers.append(('1', num, title, False))
         # Подразделы 2 уровня (например: "1.1 Методология")
-        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt) and len(txt) < 150:
+        elif re.match(r'^\d+\.\d+\.?\s+[А-ЯЁа-яё]', txt) and len(txt) < 100:
             num_match = re.match(r'^(\d+\.\d+)(?:\.\d+)*', txt)
             if num_match:
                 num = num_match.group(1)
@@ -1214,10 +1214,17 @@ def check_toc(doc, start_idx):
             doc_headers_by_num[num] = title
         elif level == 'special':
             doc_headers_by_num[title] = title  
+        # Нормализуем ключи (убираем точку в конце номера, если она есть)
+    normalized_doc_headers = {}
+    for key, value in doc_headers_by_num.items():
+        norm_key = key.rstrip('.')
+        normalized_doc_headers[norm_key] = value
+    doc_headers_by_num = normalized_doc_headers
     
     # Проверка: все ли пункты из Оглавления есть в тексте
     for num, title, page, level in toc_entries:
         key = num if num else title
+        key = key.rstrip('.')
         if key not in doc_headers_by_num:
             continue
         expected_title = doc_headers_by_num[key]
@@ -1231,6 +1238,45 @@ def check_toc(doc, start_idx):
         found = any((entry[0] == key or (entry[0] is None and entry[1].lower() == key.lower())) for entry in toc_entries)
         if not found:
             errors.append(f"Содержание – отсутствует раздел «{title}» (хотя он есть в тексте документа)")
+
+    # Если обычным способом строки не найдены, пробуем собрать все абзацы 
+    # после заголовка «СОДЕРЖАНИЕ», которые заканчиваются цифрой (номер страницы)
+    if not toc_lines:
+        backup_lines = []
+        start_search = toc_header_idx + 1 if toc_header_idx is not None else 0
+        for i in range(start_search, len(doc.paragraphs)):
+            p = doc.paragraphs[i]
+            txt = p.text.strip()
+            if not txt:
+                continue
+            # Останавливаемся, если встретили раздел без номера страницы (например, ВВЕДЕНИЕ без цифры)
+            if (txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"] or re.match(r'^\d+\.', txt)) and not re.search(r'\d+$', txt):
+                break
+            # Если строка заканчивается цифрой — это строка содержания
+            if re.search(r'\d+$', txt):
+                backup_lines.append(p)
+        if backup_lines:
+            toc_lines = backup_lines
+            # Пересобираем toc_entries заново
+            toc_entries = []
+            for p in toc_lines:
+                txt = p.text
+                page_match = re.search(r'(\d+)$', txt)
+                if not page_match:
+                    continue
+                page_num = page_match.group(1)
+                content = txt[:page_match.start()].strip()
+                content = re.sub(r'[.\s]+$', '', content).strip()
+                num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
+                if num_match:
+                    num = num_match.group(1)
+                    title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
+                    level = '1' if '.' not in num else '2'
+                    if len(num.split('.')) <= 2:
+                        toc_entries.append((num, title, page_num, level))
+                else:
+                    toc_entries.append((None, content, page_num, 'special'))
+
     
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
@@ -1261,7 +1307,28 @@ def check_toc(doc, start_idx):
                 break
         except:
             pass
-            
+
+           # === ФИЛЬТРАЦИЯ ЛОЖНЫХ ОШИБОК ОТСУТСТВИЯ РАЗДЕЛОВ ===
+        corrected_errors = []
+        for err in errors:
+            # Если это ошибка об отсутствии раздела
+            if err.startswith("Содержание – отсутствует раздел") and "хотя он есть в тексте" not in err:
+                # Извлекаем название раздела
+                match = re.search(r'«([^»]+)»', err)
+                if match:
+                    title = match.group(1)
+                    # Проверяем, есть ли такой заголовок в doc_headers (реальные заголовки документа)
+                    found_in_doc = any(
+                        doc_title.upper() == title.upper() 
+                        for _, _, doc_title, _ in doc_headers
+                    )
+                    if found_in_doc:
+                        # Раздел есть в тексте, но парсер не нашёл его в оглавлении — пропускаем ошибку
+                        continue
+            corrected_errors.append(err)
+        errors = corrected_errors
+
+    
     return errors
 
 
