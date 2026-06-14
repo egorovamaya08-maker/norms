@@ -1472,18 +1472,51 @@ def check_toc(doc, start_idx):
         })
 
     if table_data:
-        # Внедряем CSS, который заставит HTML-таблицу делить ширину поровну
+        # Внедряем CSS, который намертво изолирует текст внутри ячеек и принудительно переносит всё
         st.markdown("""
         <style>
+        /* Базовые настройки таблицы */
         .stTable table {
             width: 100% !important;
             table-layout: fixed !important;
+            border-collapse: collapse !important;
+            border: 1px solid #e0e0e0 !important;
+            border-radius: 8px !important;
         }
-        .stTable th, .stTable td {
-            width: 33.33% !important;
-            white-space: normal !important;
-            word-break: break-word !important;
+        
+        /* Пропорции колонок (20% / 40% / 40%) */
+        .stTable th:nth-child(1), .stTable td:nth-child(1) { width: 20% !important; }
+        .stTable th:nth-child(2), .stTable td:nth-child(2) { width: 40% !important; }
+        .stTable th:nth-child(3), .stTable td:nth-child(3) { width: 40% !important; }
+        
+        /* Стилизация шапки */
+        .stTable th {
+            background-color: #f8f9fa !important;
+            color: #333333 !important;
+            font-weight: 600 !important;
+            text-align: left !important;
+            padding: 12px 16px !important;
+            border-bottom: 2px solid #dee2e6 !important;
+        }
+        
+        /* Жесткая изоляция ячеек и принудительный перенос */
+        .stTable td {
+            padding: 12px 16px !important;
+            border-bottom: 1px solid #eeeeee !important;
             vertical-align: top !important;
+            color: #444444 !important;
+            font-size: 14px !important;
+            line-height: 1.5 !important;
+            
+            /* КРИТИЧЕСКИЕ СВОЙСТВА ДЛЯ ИСПРАВЛЕНИЯ НАЛЕЗАНИЯ ТЕКСТА: */
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;  /* Переносит длинные строки точек и слов в любом месте */
+            word-break: break-all !important;     /* Гарантирует, что текст не выйдет за границы */
+        }
+        
+        /* Эффект при наведении */
+        .stTable tr:hover {
+            background-color: #fdfdfd !important;
         }
         </style>
         """, unsafe_allow_html=True)
@@ -1491,7 +1524,6 @@ def check_toc(doc, start_idx):
         st.table(table_data)
     else:
         st.info("Не найдено элементов оглавления для отображения")
-
 
     # === 6. Проверка форматирования строк оглавления ===
     for p in toc_lines:
