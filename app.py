@@ -197,77 +197,65 @@ def extract_toc_entries(doc, start_idx):
 def extract_toc_entries_clean(doc, start_idx=0):
     """
     Глубокий разбор автоматического оглавления (TOC) через XML.
-    Извлекает текст строк, игнорируя служебные символы и номера страниц.
+    Извлекает пары (номер, название) из строк оглавления.
     """
-    toc_entries = []
+    toc_items = []  # список кортежей (number, title)
     
-    # Ищем все гиперссылки в документе (Word оборачивает строки TOC в w:hyperlink для навигации)
+    # Ищем все гиперссылки в документе (строки оглавления)
     body_element = doc.element.body
     
     for hyperlink in body_element.xpath('.//w:hyperlink'):
-        # Собираем весь текст внутри этой гиперссылки
+        # Собираем весь текст внутри гиперссылки
         text_nodes = hyperlink.xpath('.//w:t')
         if not text_nodes:
             continue
             
         full_text = "".join(node.text for node in text_nodes if node.text).strip()
         
-        # Если строка пустая — пропускаем
-        if not full_text:
+        if not full_text or full_text.isdigit():
             continue
         
-        # Улучшенная очистка: отделяем номер страницы от текста
-        # Номер страницы может быть в конце без пробелов (например, "ВВЕДЕНИЕ5" -> "ВВЕДЕНИЕ")
-        # Ищем цифры в конце строки
-        clean_text = full_text
+        # Очищаем от номеров страниц в конце
+        clean_text = re.sub(r'[\d\.]+$', '', full_text)  # убираем цифры в конце
+        clean_text = re.sub(r'\.{2,}', '', clean_text)   # убираем отточия
+        clean_text = clean_text.strip()
         
-        # Убираем номера страниц (цифры в конце, с точками или без)
-        # Шаблон: цифры и точки, которые могут быть в конце
-        clean_text = re.sub(r'[\d\.]+$', '', clean_text)
-        
-        # Убираем отточия и пробелы в конце
-        clean_text = re.sub(r'[\.\s]+$', '', clean_text)
-        
-        # Если после очистки текст стал слишком коротким или пустым — пропускаем
-        if len(clean_text) < 2:
+        if not clean_text or len(clean_text) < 2:
             continue
         
-        # Дополнительная очистка: убираем номера страниц, которые могли остаться внутри
-        # Например, если было "1.1 Введение 5" -> "1.1 Введение"
-        clean_text = re.sub(r'\s+\d+$', '', clean_text)
+        # Разделяем номер и название
+        # Ищем цифры в начале (например "1", "1.1", "1.3.1")
+        match = re.match(r'^(\d+(?:\.\d+)*)(.*)$', clean_text)
         
-        # Убираем множественные точки (отточия)
-        clean_text = re.sub(r'\.{2,}', '', clean_text)
-        
-        # Убираем табы и лишние пробелы
-        clean_text = re.sub(r'[\t\s]+', ' ', clean_text).strip()
-        
-        if clean_text and len(clean_text) > 2 and not clean_text.isdigit():
-            if clean_text not in toc_entries:
-                toc_entries.append(clean_text)
-    
-    # Если XML-метод через гиперссылки не сработал, используем резервный метод
-    if not toc_entries:
-        search_limit = min(50, len(doc.paragraphs))
-        for i in range(search_limit):
-            txt = doc.paragraphs[i].text.strip()
-            if not txt:
-                continue
-            # Убираем номера страниц из текста
-            clean = re.sub(r'\s+\d+$', '', txt)
-            clean = re.sub(r'[\t\s\.]{2,}\d+$', '', clean)
-            clean = re.sub(r'\.{2,}', '', clean)
-            clean = clean.strip()
+        if match:
+            number = match.group(1)
+            title = match.group(2).strip()
             
-            # Проверяем, похоже ли на строку оглавления
-            if (clean and len(clean) > 3 and 
-                (re.match(r'^\d+(\.\d+)*\s+[А-Яа-я]', clean) or 
-                 clean.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"])):
-                if clean not in toc_entries:
-                    toc_entries.append(clean)
+            # Если название пустое, берем весь текст как название без номера
+            if not title:
+                title = clean_text
+            
+            toc_items.append((number, title))
+        else:
+            # Строка без номера (ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ и т.д.)
+            toc_items.append((None, clean_text))
     
-    return toc_entries  
-
+    # Удаляем дубликаты
+    seen = set()
+    unique_items = []
+    for item in toc_items:
+        key = f"{item[0]}_{item[1]}" if item[0] else item[1]
+        if key not in seen:
+            seen.add(key)
+            unique_items.append(item)
+            # Отладка: выводим первые 5 найденных строк
+        if toc_items:
+            st.write("**🔍 Найденные строки в XML (первые 5):**")
+            for i, (num, title) in enumerate(toc_items[:5]):
+                st.write(f"  {i+1}. Номер: {num}, Название: {title[:60]}")
+        else:
+            st.warning("⚠️ Не найдено гиперссылок с оглавлением в XML")
+    return unique_items
 
 def is_dash_char(ch):
     code = ord(ch)
@@ -1380,31 +1368,7 @@ def check_toc(doc, start_idx):
         else:
             st.error("❌ Финальное сканирование TOC не нашло строк. Поле TOC не обнаружено в документе.")
     
-    # === ОТЛАДКА: выводим информацию о найденных строках ===
-    st.markdown("---")
-    st.markdown("### 🔍 Отладка сбора строк содержания")
-    st.write(f"**toc_header_idx:** {toc_header_idx}")
-    st.write(f"**start_search:** {start_search}")
-    st.write(f"**Всего строк найдено в toc_lines:** {len(toc_lines)}")
-    
-    if toc_lines:
-        with st.expander("Посмотреть найденные строки содержания"):
-            for idx, p in enumerate(toc_lines):
-                st.text(f"Строка {idx+1}: {repr(p.text[:100])}")
-    else:
-        st.warning("⚠️ toc_lines пуст — ни один метод не сработал")
-        # Покажем, что находится между заголовком СОДЕРЖАНИЕ и ВВЕДЕНИЕ
-        st.write("**Абзацы между СОДЕРЖАНИЕ и ВВЕДЕНИЕ:**")
-        count = 0
-        for i in range(start_search, min(start_search + 30, len(doc.paragraphs))):
-            txt = doc.paragraphs[i].text
-            if txt.strip():
-                st.text(f"Абзац {i}: {repr(txt[:100])}")
-                count += 1
-                if count > 15:
-                    st.text("... (показаны первые 15 непустых абзацев)")
-                    break
-    st.markdown("---")
+   
        
     # === 3. Сбор заголовков из ТЕКСТА документа (для сверки) ===
     doc_headers = []
@@ -1442,81 +1406,55 @@ def check_toc(doc, start_idx):
         elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ"]:
             doc_headers.append(('special', txt.upper(), txt, False))
     
-           # === 4. Парсинг собранных строк оглавления ===
+              # === 4. Парсинг собранных строк оглавления ===
     toc_entries = []
     
-    # Сначала пробуем улучшенный XML-метод
-    toc_clean_strings = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
+    # Используем улучшенный XML-метод
+    toc_items = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
     
-    if toc_clean_strings:
-        for entry_text in toc_clean_strings:
-            # Ищем номер раздела в начале строки (например, "1.1 Методология обзора")
-            # или "1 Логистика..."
-            num_match = re.match(r'^(\d+(?:\.\d+)?)\s+', entry_text)
-            if num_match:
-                num = num_match.group(1)
-                # Извлекаем название после номера
-                title = re.sub(r'^\d+(?:\.\d+)?\s*', '', entry_text).strip()
-                # Убираем возможные хвосты из цифр в конце названия
-                title = re.sub(r'\s*\d+$', '', title)
-                level = '1' if '.' not in num else '2'
-                if title and len(title) > 1:
-                    toc_entries.append((num, title, "?", level))
+    for number, title in toc_items:
+        if number:
+            # Определяем уровень: 1 если нет точек, 2 если есть одна точка, 3 если две и более
+            dot_count = number.count('.')
+            if dot_count == 0:
+                level = '1'
+            elif dot_count == 1:
+                level = '2'
             else:
-                # Специальные разделы без номера (ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСТОЧНИКОВ)
-                # Убираем цифры страниц, которые могли прилипнуть
-                clean_title = re.sub(r'\d+$', '', entry_text).strip()
-                if clean_title.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
-                    toc_entries.append((None, clean_title, "?", 'special'))
-                elif clean_title and len(clean_title) > 3:
-                    # Возможно, это подраздел без номера или с нестандартным форматом
-                    toc_entries.append((None, clean_title, "?", 'special'))
+                level = '3'
+            toc_entries.append((number, title, "?", level))
+        else:
+            # Специальный раздел
+            toc_entries.append((None, title, "?", 'special'))
     
-    # Резервный метод: если ничего не нашли, пробуем через toc_lines
+    # Если XML-метод не сработал, пробуем через обычные абзацы
     if not toc_entries and toc_lines:
         for p in toc_lines:
             txt = p.text.strip()
-            if len(txt) > 150 or txt.startswith('•') or txt.startswith('-') or len(txt.split()) > 12:
+            if not txt or len(txt) > 150:
                 continue
-            # Убираем номер страницы
+            
+            # Убираем номер страницы в конце
             txt = re.sub(r'\s+\d+$', '', txt)
-            txt = re.sub(r'\.{2,}', '', txt)
+            txt = re.sub(r'\.{2,}', ' ', txt)
             
-            page_match = re.search(r'(\d+)$', txt)
-            if page_match:
-                page_num = page_match.group(1)
-                content = txt[:page_match.start()].strip()
+            match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', txt)
+            if match:
+                number = match.group(1)
+                title = match.group(2).strip()
+                dot_count = number.count('.')
+                level = '1' if dot_count == 0 else '2' if dot_count == 1 else '3'
+                toc_entries.append((number, title, "?", level))
             else:
-                page_num = "?"
-                content = txt
-            
-            num_match = re.match(r'^(\d+(?:\.\d+)?)[\.\s]', content)
-            if num_match:
-                num = num_match.group(1)
-                title = re.sub(r'^\d+(?:\.\d+)?[\.\s]*', '', content).strip()
-                title = re.sub(r'\s*\d+$', '', title)  # Убираем цифры в конце
-                level = '1' if '.' not in num else '2'
-                if len(num.split('.')) <= 2 and title:
-                    toc_entries.append((num, title, page_num, level))
-            elif content.strip():
-                clean_content = re.sub(r'\d+$', '', content).strip()
-                if clean_content:
-                    toc_entries.append((None, clean_content, page_num, 'special'))
+                # Очищаем от цифр страниц
+                clean = re.sub(r'\d+$', '', txt).strip()
+                if clean.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+                    toc_entries.append((None, clean, "?", 'special'))
     
-    # Удаляем дубликаты
-    seen = set()
-    unique_toc_entries = []
+    # Отладка
+    st.write(f"**Найдено элементов оглавления:** {len(toc_entries)}")
     for entry in toc_entries:
-        key = entry[0] if entry[0] else entry[1]
-        if key not in seen:
-            seen.add(key)
-            unique_toc_entries.append(entry)
-    toc_entries = unique_toc_entries
-    
-    # Отладка: выводим обработанные записи
-    st.write(f"**Обработано записей оглавления:** {len(toc_entries)}")
-    for entry in toc_entries:
-        st.text(f"  {entry}")
+        st.text(f"  Номер: {entry[0]}, Название: {entry[1][:50]}, Уровень: {entry[3]}")
     
     # === 5. Сверка Содержания и Текста ===
     doc_headers_by_num = {}
