@@ -1752,23 +1752,30 @@ def check_word_document(file):
 
             # Подпись таблицы
             elif is_table_caption and not is_table_continuation(norm_text):
-                tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
-                if tbl_match:
-                    tbl_num = tbl_match.group(1)
-                    key = f"Таблица {tbl_num}"
+    tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
+    if tbl_match:
+        tbl_num = tbl_match.group(1)
+        key = f"Таблица {tbl_num}"
 
-                    if not re.match(r'Таблица\s+\d+\s+[-–—]{1,2}\s+', text):
-                        auto_issues.append(f"Таблица {tbl_num} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
+        if not re.match(r'Таблица\s+\d+\s+[-–—]{1,2}\s+', text):
+            auto_issues.append(f"Таблица {tbl_num} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
 
-                    if text.rstrip().endswith("."):
-                        auto_issues.append(f"{key} – удалите точку в конце названия")
-                    sizes = get_font_size_pt(p)
-                    if sizes:
-                        if any(abs(s - 14) > 0.5 for s in sizes):
-                            auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
+        if text.rstrip().endswith("."):
+            auto_issues.append(f"{key} – удалите точку в конце названия")
+        sizes = get_font_size_pt(p)
+        if sizes:
+            if any(abs(s - 14) > 0.5 for s in sizes):
+                auto_issues.append(f"{key} – установите размер шрифта 14 пт (сейчас {', '.join(str(s) for s in sizes)} пт)")
 
-                prev_para_empty = False
-                continue
+        # +++ НОВЫЙ КОД +++
+        body_idx = para_to_body_idx.get(idx)
+        if body_idx is not None:
+            empty_errors = check_empty_line_before_after(doc, body_idx, start_body_pos, key)
+            auto_issues.extend(empty_errors)
+        # +++ КОНЕЦ НОВОГО КОДА +++
+
+    prev_para_empty = False
+    continue
 
             # Основной текст
             key = norm_text[:50]
@@ -1825,6 +1832,26 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – удалите точку в конце")
 
             # Проверка пустой строки перед подразделом
+            # Проверка пустой строки перед подразделом
+            if idx > 0:
+                prev_p = doc.paragraphs[idx - 1]
+                prev_txt = prev_p.text.strip()
+                if prev_txt != "":
+                    try:
+                        body_elems_local = list(doc.element.body)
+                        body_idx = body_elems_local.index(p._element)
+                    except:
+                        body_idx = -1
+                    if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
+                        pass  # на новой странице пустая строка не нужна
+                    else:
+                        # если перед подразделом нет пустой строки, добавляем замечание
+                        auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
+            
+
+
+
+            
             if idx > 0:
                 prev_p = doc.paragraphs[idx - 1]
                 prev_txt = prev_p.text.strip()
