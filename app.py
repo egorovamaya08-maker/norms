@@ -657,6 +657,23 @@ def group_issues(issues_list):
             del grouped[k]
         standalone.insert(0, combined_fig)
 
+        # Группировка одинаковых сообщений для таблиц
+    table_msgs_by_content = defaultdict(list)
+    for key, messages in list(grouped.items()):
+        if key.startswith("Таблица ") and re.match(r'^Таблица\s+\d+', key):
+            for msg in messages:
+                table_msgs_by_content[msg].append(key)
+    
+    # Если одинаковое сообщение встречается для 3+ таблиц, объединяем
+    for msg, tables in table_msgs_by_content.items():
+        if len(tables) >= 3:
+            # Удаляем все отдельные записи для этих таблиц
+            for tbl_key in tables:
+                if tbl_key in grouped:
+                    del grouped[tbl_key]
+            # Добавляем общее сообщение в standalone
+            standalone.append(f"Таблицы – {msg}")
+            
     caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
     caption_msgs_keys = []
     for key in list(grouped.keys()):
@@ -1833,23 +1850,14 @@ def check_word_document(file):
 
             # Проверка пустой строки перед подразделом
             # Проверка пустой строки перед подразделом
+            # Проверка пустой строки перед подразделом
             if idx > 0:
                 prev_p = doc.paragraphs[idx - 1]
                 prev_txt = prev_p.text.strip()
                 # Если предыдущий параграф не пустой и является заголовком раздела (уровня 1)
                 if prev_txt and is_section_header(prev_txt):
-                    # Проверяем, не начинается ли подраздел с новой страницы
-                    try:
-                        body_elems_local = list(doc.element.body)
-                        body_idx = body_elems_local.index(p._element)
-                    except:
-                        body_idx = -1
-                    if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
-                        pass  # на новой странице пустая строка не нужна
-                    else:
-                        # Добавляем замечание, так как перед подразделом нет пустой строки
-                        auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
-                # Если предыдущий параграф - подраздел или обычный текст, проверку не делаем
+                    # Добавляем замечание, так как перед подразделом нет пустой строки
+                    auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
             
 
 
@@ -1870,7 +1878,7 @@ def check_word_document(file):
                         auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
                     else:
                         manual_issues.append(
-                            f"{key} – проверьте визуально: если он естественно перенесся на новую страницу, то отступ перед ним не нужен. "
+                            f"{key} – проверьте визуально: если он перенесен на новую страницу, то отступ перед ним не нужен. "
                             f"Если он идет внутри страницы, добавьте пустую строку."
                         )
 
