@@ -801,7 +801,7 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
             errors.append(f"{label} – добавьте пустую строку после подписи")
     return errors
 
-def smart_is_subsection_header(text, doc)):
+def smart_is_subsection_header(text, doc):
     if re.match(r'^\d+\.\d+(\.\d+)?\s+', text.strip()):
         return True
     return False
