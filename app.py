@@ -1355,12 +1355,22 @@ def check_toc(doc, start_idx):
         txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)  # повторяем для вложенных номеров
     
         # Заголовки 1 уровня
+        # Получаем стиль абзаца для более надежного распознавания
+        style_name = p.style.name.lower() if p.style else ""
+        is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
+        is_heading_2 = 'heading 2' in style_name or 'заголовок 2' in style_name or 'heading 3' in style_name or 'заголовок 3' in style_name
+        
+        # Очищаем пробелы внутри номеров (например, "1 . 1 . Текст" -> "1.1. Текст")
+        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt)
+        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)  # повторяем для вложенных номеров
+
+        # Заголовки 1 уровня
         if is_heading_1 or smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt_clean):
             num_match = re.match(r'^(\d+)', txt_clean)
             num = num_match.group(1) if num_match else ""
             title = re.sub(r'^\d+[\.\s]*', '', txt_clean).strip()
             doc_headers.append(('1', num, title, False))
-    
+
         # Подразделы
         elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
             num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
@@ -1371,7 +1381,9 @@ def check_toc(doc, start_idx):
             else:
                 # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
                 doc_headers.append(('2', '', txt_clean, True))
-           
+
+        
+     
 
     
     toc_entries = []
