@@ -1295,48 +1295,37 @@ def check_toc(doc, start_idx):
 
    
  
+   
     doc_headers = []
     in_bibliography = False
+    
+    # 1. Находим индекс первого заголовка ПОСЛЕ введения
     intro_end_idx = start_idx
-
-   
-# Сначала ищем конец введения
-    for i in range(start_idx, len(doc.paragraphs)):
-        p = doc.paragraphs[i]
-        txt = normalize_text(p.text).strip()
-        if not txt:
+    for i in range(start_idx + 1, len(doc.paragraphs)):
+        p_temp = doc.paragraphs[i]
+        txt_temp = normalize_text(p_temp.text).strip()
+        if not txt_temp:
             continue
         
-        # Отладка: отслеживаем параграфы с "1.1"
-        if '1.1' in txt or '1 . 1' in txt:
-            st.write(f"🔍 DEBUG (поиск конца введения): параграф {i}, текст='{txt[:60]}...', стиль='{p.style.name if p.style else 'None'}'")
+        style_temp = p_temp.style.name.lower() if p_temp.style else ""
+        is_heading_style_temp = ('heading 1' in style_temp or 'заголовок 1' in style_temp or 
+                                 'heading 2' in style_temp or 'заголовок 2' in style_temp)
         
-        # Проверяем стиль абзаца, чтобы распознать заголовки даже если они не написаны КАПСОМ
-        style_name = p.style.name.lower() if p.style else ""
-        is_heading_style = ('heading 1' in style_name or 'заголовок 1' in style_name or 
-                           'heading 2' in style_name or 'заголовок 2' in style_name or 
-                           'heading 3' in style_name or 'заголовок 3' in style_name)
-        
-        if (smart_is_section_header(txt, doc) or is_heading_style) and not txt.rstrip('.').endswith('.'):
+        # Ищем первый заголовок уровня 1 или 2 после Введения
+        if (original_smart_is_section_header(txt_temp, doc) or is_heading_style_temp) and not txt_temp.rstrip('.').endswith('.'):
             intro_end_idx = i
-            st.write(f"✅ DEBUG: Конец введения установлен на индекс {i} (текст: '{txt[:40]}...')")
             break
 
-    # Собираем все заголовки из текста
-    # Собираем все заголовки из текста
-    # Собираем все заголовки из текста
+    # 2. Собираем ВСЕ заголовки из документа
     for i, p in enumerate(doc.paragraphs):
         if i < start_idx:
             continue
         raw_text = p.text.strip()
         if not raw_text or has_page_number(raw_text):
             continue
+        
         txt = normalize_text(raw_text)
         is_in_intro = (i < intro_end_idx)
-        
-        # Отладка: отслеживаем параграфы с "1.1"
-        if '1.1' in txt or '1 . 1' in txt:
-            st.write(f"🔍 DEBUG (сбор заголовков): параграф {i}, is_in_intro={is_in_intro}, текст='{txt[:60]}...', стиль='{p.style.name if p.style else 'None'}'")
 
         # Специальные разделы
         if txt.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ",
@@ -1348,54 +1337,40 @@ def check_toc(doc, start_idx):
         if in_bibliography:
             continue
 
-        # Пункты внутри введения пропускаем
+        # Пропускаем нумерованные пункты внутри введения
         if is_in_intro and re.match(r'^\d+\.\s', txt) and txt.rstrip().endswith('.'):
             continue
 
-        # Получаем стиль абзаца
-        # Получаем стиль абзаца ПЕРЕД проверкой регулярных выражений
+        # Анализ стиля и очистка номера
         style_name = p.style.name.lower() if p.style else ""
         is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
         is_heading_2 = 'heading 2' in style_name or 'heading 3' in style_name or 'заголовок 2' in style_name or 'заголовок 3' in style_name
         
-        # Нормализуем пробелы внутри номеров (например, "1 . 1 . Текст" -> "1.1. Текст")
-        # Делаем это ДО любых проверок регулярками
-        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt)
-        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)  # Повторяем для надежности
+        # Удаляем пробелы внутри номеров в несколько проходов
+        txt_clean = txt
+        for _ in range(3):
+            txt_clean = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', txt_clean)
 
-        # Заголовки 1 уровня: приоритет стилю, затем регуляркам
-        if is_heading_1 or smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt_clean):
+        # Заголовки 1 уровня
+        if is_heading_1 or original_smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt_clean):
             num_match = re.match(r'^(\d+)', txt_clean)
             num = num_match.group(1) if num_match else ""
             title = re.sub(r'^\d+[\.\s]*', '', txt_clean).strip()
             doc_headers.append(('1', num, title, False))
 
-        # Подразделы: если стиль Heading 2/3 — считаем подразделом ВСЕГДА
-        # Подразделы
+        # Подразделы (Заголовки 2 уровня) - ПРОВЕРКА СТИЛЯ ИМЕЕТ ПРИОРИТЕТ
         elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
-            # Отладка: отслеживаем "1.1"
-            if '1.1' in txt_clean or '1 . 1' in txt_clean:
-                st.write(f"🔍 DEBUG (подразделы): txt_clean='{txt_clean[:60]}...', is_heading_2={is_heading_2}")
-            
             num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
+            
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt_clean).strip()
                 doc_headers.append(('2', num, title, True))
-                if '1.1' in num:
-                    st.write(f"✅ DEBUG: Добавлен подраздел {num}: '{title[:50]}...'")
             else:
-                # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
+                # Если стиль Heading 2, но номер не распознан — всё равно сохраняем
                 doc_headers.append(('2', '', txt_clean, True))
-                if '1.1' in txt_clean:
-                    st.write(f"⚠️ DEBUG: Добавлен подраздел без номера: '{txt_clean[:50]}...'")
-                # Если стиль Heading 2, но номер не распознан даже после очистки — 
-                # всё равно добавляем как подраздел (без номера или с полным текстом)
-                doc_headers.append(('2', '', txt_clean, True))
-    
-      
 
-    # Собираем записи из оглавления
+    # 3. Сбор записей из оглавления
     toc_entries = []
     toc_items = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
 
@@ -1408,15 +1383,16 @@ def check_toc(doc, start_idx):
         else:
             toc_entries.append((None, title, "?", 'special'))
 
-    # Резервный парсинг, если оглавление не найдено через гиперссылки
+    # Резервный парсинг TOC
     if not toc_entries and toc_lines:
         for p in toc_lines:
             txt = re.sub(r'\.{3,}', ' ', normalize_text(p.text)).strip()
             if not txt or len(txt) > 150:
                 continue
             txt = re.sub(r'\s+\d+$', '', txt)
-            # Убираем лишние пробелы между номером и точкой
-            txt = re.sub(r'(\d+(?:\.\d+)*)\s*\.\s*', r'\1. ', txt)
+            for _ in range(3):
+                txt = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', txt)
+            
             match = re.match(r'^(\d+(?:\.\d+)*)\s*\.?\s*(.*)$', txt)
             if match:
                 number = match.group(1)
@@ -1427,7 +1403,7 @@ def check_toc(doc, start_idx):
             elif txt.upper() in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
                 toc_entries.append((None, txt, "?", 'special'))
 
-    # Словарь заголовков из текста для сравнения
+    # 4. Словарь заголовков для сравнения
     headers_in_text = {}
     for item in doc_headers:
         if item[0] == 'special':
@@ -1437,14 +1413,13 @@ def check_toc(doc, start_idx):
             clean_title = re.sub(r'\.{3,}', '', item[2]).strip()
             headers_in_text[clean_num] = clean_title
 
-    # Формируем таблицу сравнения
+    # 5. Формирование таблицы
     table_data = []
     for entry in toc_entries:
         num = str(entry[0]).strip() if entry[0] else ""
         title = str(entry[1]).strip()
 
         title = re.sub(r'[.…]{2,}', ' ', title)
-        title = re.sub(r'…', ' ', title)
         title = re.sub(r'\s+\d+$', '', title).strip()
         title = re.sub(r'\s+', ' ', title).strip()
         title = title.rstrip('.')
@@ -1468,7 +1443,7 @@ def check_toc(doc, start_idx):
             "Содержание": toc_display,
             "В тексте документа": found_text
         })
-
+      
    
     if table_data:
         st.markdown("""
