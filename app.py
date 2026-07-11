@@ -144,7 +144,7 @@ def is_all_caps(text):
         return False
     return clean_text == clean_text.upper()
 
-def is_section_header(text, is_in_intro=False):
+def smart_is_section_header(text, is_in_intro=False, doc)):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
@@ -801,7 +801,7 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
             errors.append(f"{label} – добавьте пустую строку после подписи")
     return errors
 
-def is_subsection_header(text):
+def smart_is_subsection_header(text, doc)):
     if re.match(r'^\d+\.\d+(\.\d+)?\s+', text.strip()):
         return True
     return False
@@ -850,7 +850,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
         for i in range(current_idx - 1, -1, -1):
             p = doc.paragraphs[i]
             text = p.text.strip()
-            if text and (is_section_header(text) or is_subsection_header(text)):
+            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc))):
                 prev_section_idx = i
                 break
         
@@ -921,7 +921,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             p = doc.paragraphs[i]
             text = p.text.strip()
             
-            if text and (is_section_header(text) or is_subsection_header(text)):
+            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc))):
                 prev_section_idx = i
                 break
         
@@ -992,7 +992,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
         for i in range(current_idx - 1, -1, -1):
             p = doc.paragraphs[i]
             text = p.text.strip()
-            if text and is_section_header(text):
+            if text and smart_is_section_header(text, doc)):
                 prev_section_idx = i
                 break
         
@@ -1273,7 +1273,7 @@ def check_toc(doc, start_idx):
         txt = normalize_text(doc.paragraphs[i].text).strip()
         if not txt:
             continue
-        if is_section_header(txt) and not txt.rstrip('.').endswith('.'):
+        if smart_is_section_header(txt, doc)) and not txt.rstrip('.').endswith('.'):
             intro_end_idx = i
             break
 
@@ -1302,7 +1302,7 @@ def check_toc(doc, start_idx):
             continue
 
         # Заголовки 1 уровня
-        if is_section_header(txt) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
+        if smart_is_section_header(txt, doc)) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
             num_match = re.match(r'^(\d+)', txt)
             num = num_match.group(1) if num_match else ""
             title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
@@ -1500,7 +1500,7 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        if txt.upper() == "ВВЕДЕНИЕ" and is_section_header(txt):
+        if txt.upper() == "ВВЕДЕНИЕ" and smart_is_section_header(txt, doc)):
             intro_found = True
             start_idx = i
             intro_start_i = i
@@ -1514,7 +1514,7 @@ def check_word_document(file):
                 continue
             if has_page_number(txt):
                 continue
-            if is_section_header(txt):
+            if smart_is_section_header(txt, doc)):
                 start_idx = i
                 break
         
@@ -1629,7 +1629,7 @@ def check_word_document(file):
             is_level1 = True
         elif re.match(r'^[1-9]\d*\s+[А-ЯA-Z]', text):
             is_level1 = True
-        elif is_section_header(norm_text):
+        elif smart_is_section_header(norm_text, doc)):
             is_level1 = True
 
         
@@ -1855,7 +1855,7 @@ def check_word_document(file):
                 prev_p = doc.paragraphs[idx - 1]
                 prev_txt = prev_p.text.strip()
                 # Если предыдущий параграф не пустой и является заголовком раздела (уровня 1)
-                if prev_txt and is_section_header(prev_txt):
+                if prev_txt and smart_is_section_header(prev_txt, doc)):
                     # Добавляем замечание, так как перед подразделом нет пустой строки
                     auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
             
@@ -1874,7 +1874,7 @@ def check_word_document(file):
                         body_idx = -1
                     if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
                         pass
-                    elif is_section_header(prev_txt) or re.match(r'^\d+\.\d+', prev_txt):
+                    elif smart_is_section_header(prev_txt, doc)) or re.match(r'^\d+\.\d+', prev_txt):
                         auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
                     else:
                         manual_issues.append(
@@ -2067,6 +2067,197 @@ if uploaded_file is not None:
         st.success("✅ Автоматических ошибок не найдено.")
     
    
+# =============================================================================
+# 🆕 УЛУЧШЕННЫЕ ФУНКЦИИ ДЛЯ COMPLIANCE-ASSESSMENT
+# =============================================================================
+from typing import Optional, List
+
+# --- КОНСТАНТЫ ---
+REQUIRED_INDENT_CM = 1.0  # Абзацный отступ: 1 см
+REQUIRED_MARGIN_INCHES = Inches(0.7874)  # 20 мм ≈ 0.7874 дюйма
+HEADING_STYLES = {'Heading 1', 'Heading 2', 'Heading 3', 'Заголовок 1', 'Заголовок 2', 'Заголовок 3'}
+CONTENT_KEYWORDS = {
+    'содержание', 'оглавление', 'contents', 'table of contents', 'toc',
+    'введение', 'introduction', 'заключение', 'conclusion',
+    'список литературы', 'references', 'библиографический список'
+}
+
+# Регулярные выражения для фильтрации ложных заголовков
+INN_OGRN_PATTERN = re.compile(r'\b(ИНН|ОГРН|INN|OGRN)\s*[:]?\s*\d{10,13}\b', re.IGNORECASE)
+FORMULA_PATTERN_EXTENDED = re.compile(
+    r'([A-Za-zА-Яа-я]+[=<>]|\d+\s*[+*/%-]\s*\d+|'
+    r'[A-Za-zА-Яа-я]+\s*[=<>]\s*.+|'
+    r'[αβγδεζηθικλμνξπρστυφχψωΔΠΣΦΩ∫√∑∏∞∑∫√≈≠≤≥±×÷]|'
+    r'\([^)]+\)|\[[^\]]+\])',
+    re.IGNORECASE
+)
+MATH_SYMBOLS = ['=', '≈', '≠', '≤', '≥', '±', '∑', '∫', '√', '×', '÷', '→', 'α', 'β', 'γ', 'Δ', '∂']
+
+def is_special_text(text: str) -> bool:
+    """Фильтрует ИНН/ОГРН/формулы."""
+    if not text:
+        return False
+    text = text.strip()
+    if INN_OGRN_PATTERN.search(text):
+        return True
+    if is_formula_or_equation(text):
+        return True
+    if any(sym in text for sym in MATH_SYMBOLS):
+        return True
+    if len(text.split()) < 2 and len(text) < 5:
+        return True
+    return False
+
+def improved_is_section_header(paragraph, doc=None, **kwargs) -> bool:
+    """Улучшенная проверка заголовка раздела."""
+    if not paragraph.text.strip():
+        return False
+    text = paragraph.text.strip()
+    if is_special_text(text):
+        return False
+    style_name = paragraph.style.name if paragraph.style else ""
+    if style_name in HEADING_STYLES:
+        return True
+    text_lower = text.lower()
+    if any(keyword in text_lower for keyword in CONTENT_KEYWORDS):
+        alignment = get_effective_alignment(paragraph)
+        if alignment in (WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT):
+            return True
+    if smart_is_section_header(text, **kwargs, doc)):
+        if text.rstrip().endswith('.'):
+            return False
+        return True
+    is_bold = is_paragraph_bold(paragraph)
+    alignment = get_effective_alignment(paragraph)
+    if is_bold and alignment in (WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT):
+        if len(text.split()) >= 2 and not FORMULA_PATTERN_EXTENDED.search(text):
+            if re.match(r'^\d+(\.\d+)*[\.\)\\s]', text):
+                return True
+            if text.isupper() and len(text) > 3:
+                return True
+    return False
+
+def improved_is_subsection_header(paragraph, doc=None) -> bool:
+    """Улучшенная проверка заголовка подраздела."""
+    if not paragraph.text.strip():
+        return False
+    text = paragraph.text.strip()
+    if is_special_text(text):
+        return False
+    style_name = paragraph.style.name if paragraph.style else ""
+    if style_name in {'Heading 2', 'Heading 3', 'Заголовок 2', 'Заголовок 3'}:
+        return True
+    if smart_is_subsection_header(text, doc)):
+        return True
+    if re.match(r'^\d+(\.\d+)+[\.\)\\s]', text):
+        is_bold = is_paragraph_bold(paragraph)
+        alignment = get_effective_alignment(paragraph)
+        if is_bold and alignment in (WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.CENTER):
+            return True
+    return False
+
+def smart_is_section_header(text_or_paragraph, doc=None, **kwargs) -> bool:
+    """Универсальная обёртка для is_section_header."""
+    if hasattr(text_or_paragraph, 'text'):
+        return improved_is_section_header(text_or_paragraph, doc, **kwargs)
+    else:
+        text = str(text_or_paragraph).strip()
+        if not text:
+            return False
+        if is_special_text(text):
+            return False
+        return smart_is_section_header(text, **kwargs, doc))
+
+def smart_is_subsection_header(text_or_paragraph, doc=None) -> bool:
+    """Универсальная обёртка для is_subsection_header."""
+    if hasattr(text_or_paragraph, 'text'):
+        return improved_is_subsection_header(text_or_paragraph, doc)
+    else:
+        text = str(text_or_paragraph).strip()
+        if not text:
+            return False
+        if is_special_text(text):
+            return False
+        return smart_is_subsection_header(text, doc))
+
+def check_paragraph_indent(paragraph, is_heading: bool = False, is_list_item: bool = False) -> Optional[str]:
+    """Проверяет абзацный отступ (1 см)."""
+    if is_heading or is_list_item or not paragraph.text.strip():
+        return None
+    first_line_indent = get_effective_first_line_indent(paragraph)
+    left_indent = get_effective_left_indent(paragraph)
+    if abs(first_line_indent - REQUIRED_INDENT_CM) > 0.1:
+        return f"Абзацный отступ должен быть ровно 1 см. Текущий: {first_line_indent:.2f} см"
+    if abs(left_indent) > 0.1:
+        return f"Левый отступ должен быть 0 см. Текущий: {left_indent:.2f} см"
+    return None
+
+def get_paragraph_index(doc, paragraph) -> int:
+    """Возвращает индекс параграфа."""
+    for i, p in enumerate(doc.paragraphs):
+        if p is paragraph:
+            return i
+    return -1
+
+def check_empty_line_after_header(paragraph, doc) -> Optional[str]:
+    """Проверяет пустую строку после заголовка."""
+    if not (smart_is_section_header(paragraph, doc) or smart_is_subsection_header(paragraph, doc)):
+        return None
+    idx = get_paragraph_index(doc, paragraph)
+    if idx == -1 or idx >= len(doc.paragraphs) - 1:
+        return None
+    next_paragraph = doc.paragraphs[idx + 1]
+    if not is_empty_paragraph(next_paragraph):
+        return "После заголовка должна быть ровно одна пустая строка"
+    if idx + 2 < len(doc.paragraphs):
+        next_next_paragraph = doc.paragraphs[idx + 2]
+        if is_empty_paragraph(next_next_paragraph):
+            return "После заголовка должна быть ровно ОДНА пустая строка (найдено больше)"
+    return None
+
+def is_table_caption(paragraph) -> bool:
+    """Проверяет подпись таблицы."""
+    text = paragraph.text.strip().lower()
+    return (text.startswith("таблица") or text.startswith("table") or
+            re.match(r'^таблица\\s+\\d+', text) or re.match(r'^table\\s+\\d+', text, re.IGNORECASE))
+
+def is_figure_caption(paragraph) -> bool:
+    """Проверяет подпись рисунка."""
+    text = paragraph.text.strip().lower()
+    return (text.startswith("рисунок") or text.startswith("figure") or text.startswith("рис.") or
+            re.match(r'^рисунок\\s+\\d+', text) or re.match(r'^figure\\s+\\d+', text, re.IGNORECASE) or
+            re.match(r'^рис\\.\\s+\\d+', text))
+
+def check_empty_lines_around_object(paragraph, doc) -> Optional[str]:
+    """Проверяет пустые строки вокруг таблиц/рисунков."""
+    is_caption = is_table_caption(paragraph) or is_figure_caption(paragraph)
+    if not is_caption:
+        return None
+    idx = get_paragraph_index(doc, paragraph)
+    if idx == -1:
+        return None
+    errors = []
+    if idx > 0:
+        prev_paragraph = doc.paragraphs[idx - 1]
+        if not is_empty_paragraph(prev_paragraph):
+            errors.append("Перед подписью должна быть ровно одна пустая строка")
+    if idx < len(doc.paragraphs) - 1:
+        next_paragraph = doc.paragraphs[idx + 1]
+        if not is_empty_paragraph(next_paragraph):
+            errors.append("После подписи должна быть ровно одна пустая строка")
+    return "; ".join(errors) if errors else None
+
+def check_page_margins(doc) -> List[str]:
+    """Проверяет поля страницы (20 мм)."""
+    errors = []
+    for section in doc.sections:
+        margins = {'левое': section.left_margin, 'правое': section.right_margin,
+                   'верхнее': section.top_margin, 'нижнее': section.bottom_margin}
+        for side, margin in margins.items():
+            if abs(margin.inches - REQUIRED_MARGIN_INCHES.inches) > 0.01:
+                errors.append(f"Поле {side} должно быть 20 мм. Текущее: {margin.inches * 25.4:.2f} мм")
+    return errors
+
     st.markdown("---")
     #st.markdown("### 📋 Экспертная проверка (ОБЯЗАТЕЛЬНО):")
     st.markdown("**📋 Экспертная проверка (ОБЯЗАТЕЛЬНО)**") 
