@@ -655,27 +655,37 @@ def group_issues(issues_list):
         else:
             standalone.append(issue)
 
+  
     figure_keys = [k for k in grouped if re.match(r'^Рисунок\s+\d', k)]
-    if len(figure_keys) > 3:
-        all_fig_messages = []
-        for k in figure_keys:
-            all_fig_messages.extend(grouped[k])
-        msg_counts = Counter(all_fig_messages)
-        unique_msgs = list(msg_counts.keys())
-        first_seen = {}
-        for msg in all_fig_messages:
-            if msg not in first_seen:
-                first_seen[msg] = len(first_seen)
-        unique_msgs.sort(key=lambda m: (-msg_counts[m], first_seen[m]))
+    
+    # Собираем все сообщения по рисункам и считаем их частоту
+    fig_msg_counts = defaultdict(list)  # сообщение -> список рисунков
+    for k in figure_keys:
+        for msg in grouped[k]:
+            fig_msg_counts[msg].append(k)
+    
+    # Группируем только если одинаковое сообщение встречается у 3+ рисунков
+    fig_msgs_to_group = [msg for msg, keys in fig_msg_counts.items() if len(keys) >= 3]
+    
+    if fig_msgs_to_group:
+        # Удаляем сгруппированные сообщения из индивидуальных записей
+        for msg in fig_msgs_to_group:
+            for k in fig_msg_counts[msg]:
+                if k in grouped:
+                    grouped[k] = [m for m in grouped[k] if m != msg]
+                    if not grouped[k]:
+                        del grouped[k]
+        
+        # Добавляем общее сообщение
         replacements = {
             "удалите точку в конце": "в названии не должно быть точки в конце",
             "уберите точку в конце": "в названии не должно быть точки в конце"
         }
-        transformed = [replacements.get(m, m) for m in unique_msgs]
-        combined_fig = "Рисунки – " + ", ".join(transformed)
-        for k in figure_keys:
-            del grouped[k]
+        transformed_msgs = [replacements.get(m, m) for m in fig_msgs_to_group]
+        combined_fig = "Рисунки – " + ", ".join(transformed_msgs)
         standalone.insert(0, combined_fig)
+    
+   
 
         # Группировка одинаковых сообщений для таблиц
     table_msgs_by_content = defaultdict(list)
@@ -1335,23 +1345,36 @@ def check_toc(doc, start_idx):
        
 
         # Заголовки 1 уровня
-        if smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
-            num_match = re.match(r'^(\d+)', txt)
-            num = num_match.group(1) if num_match else ""
-            title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
-            doc_headers.append(('1', num, title, False))
 
+        style_name = p.style.name.lower() if p.style else ""
+        is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
+        is_heading_2 = 'heading 2' in style_name or 'заголовок 2' in style_name or 'heading 3' in style_name or 'заголовок 3' in style_name
+        
+        # Очищаем пробелы внутри номеров (например, "1 . 1 . Текст" -> "1.1. Текст")
+        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt)
+        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)  # повторяем для вложенных номеров
+    
+        # Заголовки 1 уровня
+        if is_heading_1 or smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt_clean):
+            num_match = re.match(r'^(\d+)', txt_clean)
+            num = num_match.group(1) if num_match else ""
+            title = re.sub(r'^\d+[\.\s]*', '', txt_clean).strip()
+            doc_headers.append(('1', num, title, False))
+    
         # Подразделы
-        elif re.match(r'^\d+\.\d+', txt):
-            num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt)
+        elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
+            num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
             if num_match:
                 num = num_match.group(1)
-                title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt).strip()
+                title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt_clean).strip()
                 doc_headers.append(('2', num, title, True))
-        else:
-        # Отладка: покажем первые 100 символов текста, который не распознан
-            if re.match(r'^\d+\.', txt) and len(txt) > 10:
-                st.write(f"⚠️ DEBUG: Не распознан текст: '{txt[:100]}...'")
+            else:
+                # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
+                doc_headers.append(('2', '', txt_clean, True))
+            else:
+            # Отладка: покажем первые 100 символов текста, который не распознан
+                if re.match(r'^\d+\.', txt) and len(txt) > 10:
+                    st.write(f"⚠️ DEBUG: Не распознан текст: '{txt[:100]}...'")
 
     
     toc_entries = []
