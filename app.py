@@ -2045,40 +2045,7 @@ def check_word_document(file):
     
     return group_issues(all_issues)
 
-# интерфейс
-st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
-st.title("📊 Автоматическая проверка документов Word")
-st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
-uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
-manual_items = [] 
-if uploaded_file is not None:
-    with st.spinner("Проверяем..."):
-        results = check_word_document(uploaded_file)
-    
-    st.subheader("Результаты проверки основного текста:")
-    
-   
-    manual_mode = False
-    auto_errors = []
-    manual_items = []
-    
-    for r in results:
-        if r.startswith("📋 Для проверки человеком:"):
-            manual_mode = True
-            continue
-        if manual_mode:
-            manual_items.append(r)
-        else:
-            auto_errors.append(r)
-    
-    
-    if auto_errors:
-        for err in auto_errors:
-            st.write(f"• {err}")
-    else:
-        st.success("✅ Автоматических ошибок не найдено.")
-    
-   
+
 # =============================================================================
 # 🆕 УЛУЧШЕННЫЕ ФУНКЦИИ ДЛЯ COMPLIANCE-ASSESSMENT
 # =============================================================================
@@ -2277,20 +2244,45 @@ def check_page_margins(doc) -> List[str]:
                 errors.append(f"Поле {side} должно быть 20 мм. Текущее: {margin.inches * 25.4:.2f} мм")
     return errors
 
-st.markdown("---")
-    #st.markdown("### 📋 Экспертная проверка (ОБЯЗАТЕЛЬНО):")
-st.markdown("**📋 Экспертная проверка (ОБЯЗАТЕЛЬНО)**") 
-st.markdown("Проверьте титульный лист, задание, содержание, введение (первые 4 страницы) на соответствие шаблону.")
-st.markdown("Проверьте вручную наличие надписей «Продолжение таблицы» / «Окончание таблицы» на каждой странице разрыва.")
-st.markdown("Проверьте правильность переноса рисунков на новую страницу и их подписей.")
-st.markdown("Проверьте, что оглавление является автособираемым")
-        
+uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
+
+if uploaded_file is not None:
+    with st.spinner("Проверяем..."):
+        results = check_word_document(uploaded_file)
     
-if manual_items:
+    st.subheader("Результаты проверки основного текста:")
+    
+    manual_mode = False
+    auto_errors = []
+    manual_items = []
+    
+    for r in results:
+        if r.startswith("📋 Для проверки человеком:"):
+            manual_mode = True
+            continue
+        if manual_mode:
+            manual_items.append(r)
+        else:
+            auto_errors.append(r)
+    
+    if auto_errors:
+        for err in auto_errors:
+            st.write(f"• {err}")
+    else:
+        st.success("✅ Автоматических ошибок не найдено.")
+    
+    # 👇 ВЕСЬ ОСТАЛЬНОЙ КОД ДОЛЖЕН БЫТЬ ВНУТРИ ЭТОГО БЛОКА (с отступом в 4 пробела)
+    st.markdown("---")
+    st.markdown("**📋 Экспертная проверка (ОБЯЗАТЕЛЬНО)**") 
+    st.markdown("Проверьте титульный лист, задание, содержание, введение (первые 4 страницы) на соответствие шаблону.")
+    st.markdown("Проверьте вручную наличие надписей «Продолжение таблицы» / «Окончание таблицы» на каждой странице разрыва.")
+    st.markdown("Проверьте правильность переноса рисунков на новую страницу и их подписей.")
+    st.markdown("Проверьте, что оглавление является автособираемым")
+            
+    if manual_items:
         st.markdown("#### Дополнительные замечания:")
         for item in manual_items:
             if item.strip():
                 st.write(f"• {item}")
     
-    
-st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
+    st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
