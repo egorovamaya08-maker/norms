@@ -2244,6 +2244,9 @@ def check_page_margins(doc) -> List[str]:
                 errors.append(f"Поле {side} должно быть 20 мм. Текущее: {margin.inches * 25.4:.2f} мм")
     return errors
 
+st.set_page_config(page_title="Нормоконтроль документов", layout="centered")
+st.title("📊 Автоматическая проверка документов Word")
+st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
 uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
 
 if uploaded_file is not None:
