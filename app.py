@@ -1306,7 +1306,7 @@ def check_toc(doc, start_idx):
         txt = normalize_text(raw_text)
         if '1.1' in txt or '1 . 1' in txt or txt.startswith('1'):
             style_name = p.style.name if p.style else "None"
-            st.write(f"🔍 DEBUG параграф {i}: стиль='{style_name}', текст='
+            
         
         is_in_intro = (i < intro_end_idx)
 
@@ -1332,9 +1332,7 @@ def check_toc(doc, start_idx):
         is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
         is_heading_2 = 'heading 2' in style_name or 'heading 3' in style_name or 'заголовок 2' in style_name or 'заголовок 3' in style_name
         
-        # Отладка
-        if is_heading_2 and '1.1' in txt:
-            st.write(f"✅ DEBUG: Найден Heading 2 с текстом '{txt[:60]}...
+       
 
         # Заголовки 1 уровня
         if smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
