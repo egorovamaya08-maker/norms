@@ -2178,7 +2178,7 @@ def smart_is_subsection_header(text_or_paragraph, doc=None) -> bool:
             return False
         if is_special_text(text):
             return False
-        return smart_is_subsection_header(text, doc))
+        return smart_is_subsection_header(text, doc)
 
 def check_paragraph_indent(paragraph, is_heading: bool = False, is_list_item: bool = False) -> Optional[str]:
     """Проверяет абзацный отступ (1 см)."""
