@@ -38,6 +38,17 @@ def iter_block_items(parent):
         elif isinstance(child, CT_Tbl):
             yield Table(child, parent)
 
+def clean_header_text(text: str) -> str:
+    """Очищает текст заголовка для умного сравнения (игнорирует любые отступы и точки номеров)"""
+    if not text:
+        return ""
+    # Заменяем неразрывные пробелы \xa0 и знаки табуляции \t на обычные пробелы
+    text = text.replace('\xa0', ' ').replace('\t', ' ').lower().strip()
+    # Схлопываем множественные пробелы в один
+    text = re.sub(r'\s+', ' ', text)
+    # Убираем точку в конце номера подраздела, если она там есть (например: "1.1. текст" -> "1.1 текст")
+    text = re.sub(r'^(\d+(?:\.\d+)+)\.\s+', r'\1 ', text)
+    return text.strip()
 
 def normalize_text(text):
     if not text:
@@ -184,6 +195,7 @@ def smart_is_section_header(text, doc, is_in_intro=False):
     return False
 
 def normalize_title(text):
+    text = clean_header_text(text)
     text = re.sub(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+[\.\s]*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'^\d+(?:\.\d+)*[\s\.]+', '', text)
     return text.strip().upper()
@@ -2118,21 +2130,25 @@ def improved_is_section_header(paragraph, doc=None, **kwargs) -> bool:
     style_name = paragraph.style.name if paragraph.style else ""
     if style_name in HEADING_STYLES:
         return True
-    text_lower = text.lower()
+    
+    # Используем очищенный текст для проверки ключевых слов
+    text_lower = clean_header_text(text)
     if any(keyword in text_lower for keyword in CONTENT_KEYWORDS):
         alignment = get_effective_alignment(paragraph)
         if alignment in (WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT):
             return True
+            
     if smart_is_section_header(text, doc, **kwargs):
-    
         if text.rstrip().endswith('.'):
             return False
         return True
+        
     is_bold = is_paragraph_bold(paragraph)
     alignment = get_effective_alignment(paragraph)
     if is_bold and alignment in (WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT):
         if len(text.split()) >= 2 and not FORMULA_PATTERN_EXTENDED.search(text):
-            if re.match(r'^\d+(\.\d+)*[\.\)\\s]', text):
+            # ИСПРАВЛЕНО: (?:[\.\)]|\s+) корректно ловит точку, скобку ИЛИ любые пробелы/табуляции
+            if re.match(r'^\d+(?:\.\d+)*(?:[\.\)]|\s+)', text):
                 return True
             if text.isupper() and len(text) > 3:
                 return True
@@ -2150,7 +2166,9 @@ def improved_is_subsection_header(paragraph, doc=None) -> bool:
         return True
     if smart_is_subsection_header(text, doc):
         return True
-    if re.match(r'^\d+(\.\d+)+[\.\)\\s]', text):
+        
+    # ИСПРАВЛЕНО: Регулярное выражение теперь видит табуляции и множественные пробелы после номера подраздела
+    if re.match(r'^\d+(?:\.\d+)+(?:[\.\)]|\s+)', text):
         is_bold = is_paragraph_bold(paragraph)
         alignment = get_effective_alignment(paragraph)
         if is_bold and alignment in (WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.CENTER):
