@@ -1371,10 +1371,7 @@ def check_toc(doc, start_idx):
             else:
                 # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
                 doc_headers.append(('2', '', txt_clean, True))
-            else:
-            # Отладка: покажем первые 100 символов текста, который не распознан
-                if re.match(r'^\d+\.', txt) and len(txt) > 10:
-                    st.write(f"⚠️ DEBUG: Не распознан текст: '{txt[:100]}...'")
+           
 
     
     toc_entries = []
