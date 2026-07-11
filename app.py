@@ -1367,6 +1367,8 @@ def check_toc(doc, start_idx):
             else:
                 # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
                 doc_headers.append(('2', '', txt_clean, True))
+        elif is_heading_2: 
+            doc_headers.append(('2', '', txt_clean, True))
 
     # Собираем записи из оглавления
     toc_entries = []
