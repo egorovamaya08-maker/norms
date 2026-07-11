@@ -2166,7 +2166,7 @@ def smart_is_section_header(text_or_paragraph, doc=None, **kwargs) -> bool:
             return False
         if is_special_text(text):
             return False
-        return smart_is_section_header(text, **kwargs, doc))
+        return smart_is_section_header(text, **kwargs, doc)
 
 def smart_is_subsection_header(text_or_paragraph, doc=None) -> bool:
     """Универсальная обёртка для is_subsection_header."""
