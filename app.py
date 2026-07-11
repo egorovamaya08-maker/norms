@@ -1320,6 +1320,11 @@ def check_toc(doc, start_idx):
         
         if is_in_intro and re.match(r'^\d+\.\s', txt) and txt.rstrip().endswith('.'):
             continue
+      
+        style_name = p.style.name.lower() if p.style else ""
+        is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
+        is_heading_2 = 'heading 2' in style_name or 'heading 3' in style_name or 'заголовок 2' in style_name or 'заголовок 3' in style_name
+
 
         # Заголовки 1 уровня
         if smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
@@ -1394,9 +1399,7 @@ def check_toc(doc, start_idx):
             clean_num = str(item[1]).strip('.')
             clean_title = re.sub(r'\.{3,}', '', item[2]).strip()
             headers_in_text[clean_num] = clean_title
-    st.write(f" DEBUG: Найдено заголовков в тексте: {len(headers_in_text)}")
-    for num, title in sorted(headers_in_text.items()):
-        st.write(f"   - {num}: '{title[:60]}...'")
+    
 
 
     table_data = []
