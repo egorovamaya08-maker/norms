@@ -1343,31 +1343,34 @@ def check_toc(doc, start_idx):
             continue
 
         # Получаем стиль абзаца
+        # Получаем стиль абзаца ПЕРЕД проверкой регулярных выражений
         style_name = p.style.name.lower() if p.style else ""
         is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
         is_heading_2 = 'heading 2' in style_name or 'heading 3' in style_name or 'заголовок 2' in style_name or 'заголовок 3' in style_name
-
-        # Очищаем пробелы внутри номеров (например, "1 . 1 . Текст" -> "1.1. Текст")
+        
+        # Нормализуем пробелы внутри номеров (например, "1 . 1 . Текст" -> "1.1. Текст")
+        # Делаем это ДО любых проверок регулярками
         txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt)
-        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)
+        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)  # Повторяем для надежности
 
-        # Заголовки 1 уровня
+        # Заголовки 1 уровня: приоритет стилю, затем регуляркам
         if is_heading_1 or smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt_clean):
             num_match = re.match(r'^(\d+)', txt_clean)
             num = num_match.group(1) if num_match else ""
             title = re.sub(r'^\d+[\.\s]*', '', txt_clean).strip()
             doc_headers.append(('1', num, title, False))
 
-        # Подразделы: если стиль Heading 2/3 — считаем подразделом даже без номера
-        elif is_heading_2:
-            # Извлекаем номер и название, если возможно
+        # Подразделы: если стиль Heading 2/3 — считаем подразделом ВСЕГДА
+        elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
+            # Извлекаем номер из очищенного текста
             num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt_clean).strip()
                 doc_headers.append(('2', num, title, True))
             else:
-                # Если номер не распознан — всё равно добавляем как подраздел без номера
+                # Если стиль Heading 2, но номер не распознан даже после очистки — 
+                # всё равно добавляем как подраздел (без номера или с полным текстом)
                 doc_headers.append(('2', '', txt_clean, True))
     
       
