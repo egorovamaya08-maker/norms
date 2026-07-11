@@ -144,7 +144,7 @@ def is_all_caps(text):
         return False
     return clean_text == clean_text.upper()
 
-def smart_is_section_header(text, is_in_intro=False, doc)):
+def smart_is_section_header(text, is_in_intro=False, doc):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
