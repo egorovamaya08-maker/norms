@@ -850,7 +850,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
         for i in range(current_idx - 1, -1, -1):
             p = doc.paragraphs[i]
             text = p.text.strip()
-            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc)):
+            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc):
                 prev_section_idx = i
                 break
         
@@ -921,7 +921,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             p = doc.paragraphs[i]
             text = p.text.strip()
             
-            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc)):
+            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc):
                 prev_section_idx = i
                 break
         
