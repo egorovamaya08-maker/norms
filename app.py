@@ -155,7 +155,8 @@ def is_all_caps(text):
         return False
     return clean_text == clean_text.upper()
 
-def smart_is_section_header(text, doc, is_in_intro=False):
+
+def original_smart_is_section_header(text, doc, is_in_intro=False):
     cleaned = normalize_text(text)
     if not cleaned:
         return False
@@ -2152,7 +2153,8 @@ def smart_is_section_header(text_or_paragraph, doc=None, **kwargs) -> bool:
             return False
         if is_special_text(text):
             return False
-        return smart_is_section_header(text, doc, **kwargs )
+        return original_smart_is_section_header(text, doc, **kwargs)
+        
 
 def smart_is_subsection_header(text_or_paragraph, doc=None) -> bool:
     """Универсальная обёртка для is_subsection_header."""
