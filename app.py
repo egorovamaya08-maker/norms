@@ -2050,7 +2050,7 @@ st.set_page_config(page_title="Нормоконтроль документов",
 st.title("📊 Автоматическая проверка документов Word")
 st.write("Загрузите документ в формате .docx – проверка по полному чек-листу.")
 uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
-
+manual_items = [] 
 if uploaded_file is not None:
     with st.spinner("Проверяем..."):
         results = check_word_document(uploaded_file)
