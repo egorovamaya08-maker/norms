@@ -1299,12 +1299,21 @@ def check_toc(doc, start_idx):
     in_bibliography = False
     intro_end_idx = start_idx
 
+   
     # Сначала ищем конец введения
     for i in range(start_idx, len(doc.paragraphs)):
-        txt = normalize_text(doc.paragraphs[i].text).strip()
+        p = doc.paragraphs[i]
+        txt = normalize_text(p.text).strip()
         if not txt:
             continue
-        if smart_is_section_header(txt, doc) and not txt.rstrip('.').endswith('.'):
+        
+        # Проверяем стиль абзаца, чтобы распознать заголовки даже если они не написаны КАПСОМ
+        style_name = p.style.name.lower() if p.style else ""
+        is_heading_style = ('heading 1' in style_name or 'заголовок 1' in style_name or 
+                           'heading 2' in style_name or 'заголовок 2' in style_name or 
+                           'heading 3' in style_name or 'заголовок 3' in style_name)
+        
+        if (smart_is_section_header(txt, doc) or is_heading_style) and not txt.rstrip('.').endswith('.'):
             intro_end_idx = i
             break
 
