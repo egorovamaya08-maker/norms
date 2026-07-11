@@ -1300,12 +1300,16 @@ def check_toc(doc, start_idx):
     intro_end_idx = start_idx
 
    
-    # Сначала ищем конец введения
+# Сначала ищем конец введения
     for i in range(start_idx, len(doc.paragraphs)):
         p = doc.paragraphs[i]
         txt = normalize_text(p.text).strip()
         if not txt:
             continue
+        
+        # Отладка: отслеживаем параграфы с "1.1"
+        if '1.1' in txt or '1 . 1' in txt:
+            st.write(f"🔍 DEBUG (поиск конца введения): параграф {i}, текст='{txt[:60]}...', стиль='{p.style.name if p.style else 'None'}'")
         
         # Проверяем стиль абзаца, чтобы распознать заголовки даже если они не написаны КАПСОМ
         style_name = p.style.name.lower() if p.style else ""
@@ -1315,8 +1319,10 @@ def check_toc(doc, start_idx):
         
         if (smart_is_section_header(txt, doc) or is_heading_style) and not txt.rstrip('.').endswith('.'):
             intro_end_idx = i
+            st.write(f"✅ DEBUG: Конец введения установлен на индекс {i} (текст: '{txt[:40]}...')")
             break
 
+    # Собираем все заголовки из текста
     # Собираем все заголовки из текста
     # Собираем все заголовки из текста
     for i, p in enumerate(doc.paragraphs):
@@ -1327,6 +1333,10 @@ def check_toc(doc, start_idx):
             continue
         txt = normalize_text(raw_text)
         is_in_intro = (i < intro_end_idx)
+        
+        # Отладка: отслеживаем параграфы с "1.1"
+        if '1.1' in txt or '1 . 1' in txt:
+            st.write(f"🔍 DEBUG (сбор заголовков): параграф {i}, is_in_intro={is_in_intro}, текст='{txt[:60]}...', стиль='{p.style.name if p.style else 'None'}'")
 
         # Специальные разделы
         if txt.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ",
@@ -1361,14 +1371,24 @@ def check_toc(doc, start_idx):
             doc_headers.append(('1', num, title, False))
 
         # Подразделы: если стиль Heading 2/3 — считаем подразделом ВСЕГДА
+        # Подразделы
         elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
-            # Извлекаем номер из очищенного текста
+            # Отладка: отслеживаем "1.1"
+            if '1.1' in txt_clean or '1 . 1' in txt_clean:
+                st.write(f"🔍 DEBUG (подразделы): txt_clean='{txt_clean[:60]}...', is_heading_2={is_heading_2}")
+            
             num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt_clean).strip()
                 doc_headers.append(('2', num, title, True))
+                if '1.1' in num:
+                    st.write(f"✅ DEBUG: Добавлен подраздел {num}: '{title[:50]}...'")
             else:
+                # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
+                doc_headers.append(('2', '', txt_clean, True))
+                if '1.1' in txt_clean:
+                    st.write(f"⚠️ DEBUG: Добавлен подраздел без номера: '{txt_clean[:50]}...'")
                 # Если стиль Heading 2, но номер не распознан даже после очистки — 
                 # всё равно добавляем как подраздел (без номера или с полным текстом)
                 doc_headers.append(('2', '', txt_clean, True))
