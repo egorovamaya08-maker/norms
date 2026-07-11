@@ -2179,12 +2179,20 @@ def improved_is_subsection_header(paragraph, doc=None) -> bool:
     if smart_is_subsection_header(text, doc):
         return True
         
-    # ИСПРАВЛЕНО: Регулярное выражение теперь видит табуляции и множественные пробелы после номера подраздела
-    if re.match(r'^\d+(?:\.\d+)+(?:[\.\)]|\s+)', text):
+    # ✅ НОВОЕ: поддерживаем "1.1 Текст" (пробел после номера)
+    if re.match(r'^\d+(?:\.\d+)+\s+', text):
         is_bold = is_paragraph_bold(paragraph)
         alignment = get_effective_alignment(paragraph)
         if is_bold and alignment in (WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.CENTER):
             return True
+    
+    # ✅ СТАРОЕ: поддерживаем "1.1. Текст" и "1.1) Текст"
+    if re.match(r'^\d+(?:\.\d+)+(?:[\.\)])', text):
+        is_bold = is_paragraph_bold(paragraph)
+        alignment = get_effective_alignment(paragraph)
+        if is_bold and alignment in (WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.CENTER):
+            return True
+            
     return False
 
 def smart_is_section_header(text_or_paragraph, doc=None, **kwargs) -> bool:
