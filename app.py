@@ -2123,7 +2123,8 @@ def improved_is_section_header(paragraph, doc=None, **kwargs) -> bool:
         alignment = get_effective_alignment(paragraph)
         if alignment in (WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT):
             return True
-    if smart_is_section_header(text, **kwargs, doc):
+    if smart_is_section_header(text, doc, **kwargs):
+    
         if text.rstrip().endswith('.'):
             return False
         return True
