@@ -1318,6 +1318,7 @@ def check_toc(doc, start_idx):
             break
 
     # Собираем все заголовки из текста
+    # Собираем все заголовки из текста
     for i, p in enumerate(doc.paragraphs):
         if i < start_idx:
             continue
@@ -1348,7 +1349,7 @@ def check_toc(doc, start_idx):
 
         # Очищаем пробелы внутри номеров (например, "1 . 1 . Текст" -> "1.1. Текст")
         txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt)
-        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)  # повторяем для вложенных номеров
+        txt_clean = re.sub(r'(\d+)\s*\.\s*(\d+)', r'\1.\2', txt_clean)
 
         # Заголовки 1 уровня
         if is_heading_1 or smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt_clean):
@@ -1357,18 +1358,19 @@ def check_toc(doc, start_idx):
             title = re.sub(r'^\d+[\.\s]*', '', txt_clean).strip()
             doc_headers.append(('1', num, title, False))
 
-        # Подразделы
-        elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
+        # Подразделы: если стиль Heading 2/3 — считаем подразделом даже без номера
+        elif is_heading_2:
+            # Извлекаем номер и название, если возможно
             num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
             if num_match:
                 num = num_match.group(1)
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt_clean).strip()
                 doc_headers.append(('2', num, title, True))
             else:
-                # Если стиль Heading 2, но номер не распознан регуляркой, берем весь текст
+                # Если номер не распознан — всё равно добавляем как подраздел без номера
                 doc_headers.append(('2', '', txt_clean, True))
-        elif is_heading_2: 
-            doc_headers.append(('2', '', txt_clean, True))
+    
+      
 
     # Собираем записи из оглавления
     toc_entries = []
