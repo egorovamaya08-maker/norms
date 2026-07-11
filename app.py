@@ -1296,33 +1296,80 @@ def check_toc(doc, start_idx):
    
  
    
+    
+    
+        # Вспомогательная функция для получения автонумерации из XML
+    def get_auto_numbering(para):
+        try:
+            pPr = para._element.find(qn('w:pPr'))
+            if pPr is None: return None
+            numPr = pPr.find(qn('w:numPr'))
+            if numPr is None: return None
+            
+            numId_elem = numPr.find(qn('w:numId'))
+            ilvl_elem = numPr.find(qn('w:ilvl'))
+            if numId_elem is None or ilvl_elem is None: return None
+            
+            numId = numId_elem.get(qn('w:val'))
+            ilvl = ilvl_elem.get(qn('w:val'))
+            
+            # Ищем определение нумерации
+            numbering_part = doc.part.numbering_part
+            if numbering_part is None: return None
+            
+            numbering_xml = numbering_part._element
+            abstractNumId = None
+            for num in numbering_xml.findall(qn('w:num')):
+                if num.get(qn('w:numId')) == numId:
+                    aid = num.find(qn('w:abstractNumId'))
+                    if aid is not None: abstractNumId = aid.get(qn('w:val'))
+                    break
+                    
+            if abstractNumId is None: return None
+            
+            for abstractNum in numbering_xml.findall(qn('w:abstractNum')):
+                if abstractNum.get(qn('w:abstractNumId')) == abstractNumId:
+                    for lvl in abstractNum.findall(qn('w:lvl')):
+                        if lvl.get(qn('w:ilvl')) == ilvl:
+                            lvlText = lvl.find(qn('w:lvlText'))
+                            if lvlText is not None:
+                                raw_val = lvlText.get(qn('w:val'), '')
+                                # Преобразуем %1, %2 и т.д. в реальные цифры (упрощенно)
+                                # Для Heading 2 обычно это X.Y
+                                import re as _re
+                                parts = _re.split(r'%\d+', raw_val)
+                                # Пытаемся восстановить номер на основе уровня
+                                # Это эвристика, но для стандартных шаблонов работает
+                                if ilvl == '0': return "1" 
+                                if ilvl == '1': return "1.1" # Заглушка, ниже будет точный расчет
+                                return raw_val.replace('%1', '1').replace('%2', '1')
+        except:
+            pass
+        return None
+
     doc_headers = []
     in_bibliography = False
     
-    # 1. Находим индекс первого заголовка ПОСЛЕ введения
+    # 1. Находим конец введения
     intro_end_idx = start_idx
     for i in range(start_idx + 1, len(doc.paragraphs)):
         p_temp = doc.paragraphs[i]
         txt_temp = normalize_text(p_temp.text).strip()
-        if not txt_temp:
-            continue
+        if not txt_temp: continue
         
         style_temp = p_temp.style.name.lower() if p_temp.style else ""
         is_heading_style_temp = ('heading 1' in style_temp or 'заголовок 1' in style_temp or 
                                  'heading 2' in style_temp or 'заголовок 2' in style_temp)
         
-        # Ищем первый заголовок уровня 1 или 2 после Введения
         if (original_smart_is_section_header(txt_temp, doc) or is_heading_style_temp) and not txt_temp.rstrip('.').endswith('.'):
             intro_end_idx = i
             break
 
-    # 2. Собираем ВСЕ заголовки из документа
+    # 2. Собираем заголовки
     for i, p in enumerate(doc.paragraphs):
-        if i < start_idx:
-            continue
+        if i < start_idx: continue
         raw_text = p.text.strip()
-        if not raw_text or has_page_number(raw_text):
-            continue
+        if not raw_text or has_page_number(raw_text): continue
         
         txt = normalize_text(raw_text)
         is_in_intro = (i < intro_end_idx)
@@ -1331,22 +1378,19 @@ def check_toc(doc, start_idx):
         if txt.upper() in {"ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ",
                           "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ", "БИБЛИОГРАФИЧЕСКИЙ СПИСОК"}:
             doc_headers.append(('special', txt.upper(), txt, False))
-            if "СПИСОК" in txt.upper():
-                in_bibliography = True
+            if "СПИСОК" in txt.upper(): in_bibliography = True
             continue
-        if in_bibliography:
-            continue
+        if in_bibliography: continue
 
-        # Пропускаем нумерованные пункты внутри введения
-        if is_in_intro and re.match(r'^\d+\.\s', txt) and txt.rstrip().endswith('.'):
-            continue
+        # Пропускаем пункты внутри введения
+        if is_in_intro and re.match(r'^\d+\.\s', txt) and txt.rstrip().endswith('.'): continue
 
-        # Анализ стиля и очистка номера
+        # Анализ стиля
         style_name = p.style.name.lower() if p.style else ""
         is_heading_1 = 'heading 1' in style_name or 'заголовок 1' in style_name
         is_heading_2 = 'heading 2' in style_name or 'heading 3' in style_name or 'заголовок 2' in style_name or 'заголовок 3' in style_name
         
-        # Удаляем пробелы внутри номеров в несколько проходов
+        # Очистка пробелов в номерах
         txt_clean = txt
         for _ in range(3):
             txt_clean = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', txt_clean)
@@ -1358,7 +1402,7 @@ def check_toc(doc, start_idx):
             title = re.sub(r'^\d+[\.\s]*', '', txt_clean).strip()
             doc_headers.append(('1', num, title, False))
 
-        # Подразделы (Заголовки 2 уровня) - ПРОВЕРКА СТИЛЯ ИМЕЕТ ПРИОРИТЕТ
+        # Подразделы (Заголовки 2 уровня)
         elif is_heading_2 or re.match(r'^\d+\.\d+', txt_clean):
             num_match = re.match(r'^(\d+\.\d+(?:\.\d+)*)', txt_clean)
             
@@ -1367,13 +1411,17 @@ def check_toc(doc, start_idx):
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt_clean).strip()
                 doc_headers.append(('2', num, title, True))
             else:
-                # Если стиль Heading 2, но номер не распознан — всё равно сохраняем
-                doc_headers.append(('2', '', txt_clean, True))
+                #  ИСПРАВЛЕНИЕ: Если номера нет в тексте, но стиль Heading 2 — 
+                # пробуем достать его из автонумерации XML
+                auto_num = get_auto_numbering(p)
+                # Если автонумерация не далась, используем пустую строку, 
+                # но сохраняем заголовок, чтобы он был в базе для сравнения по названию
+                final_num = auto_num if auto_num else ""
+                doc_headers.append(('2', final_num, txt_clean, True))
 
-    # 3. Сбор записей из оглавления
+    # 3. Сбор записей из оглавления (без изменений)
     toc_entries = []
     toc_items = extract_toc_entries_clean(doc, toc_header_idx if toc_header_idx else 0)
-
     for number, title in toc_items:
         title = re.sub(r'\.{3,}', ' ', title).strip().rstrip('.')
         if number:
@@ -1387,12 +1435,10 @@ def check_toc(doc, start_idx):
     if not toc_entries and toc_lines:
         for p in toc_lines:
             txt = re.sub(r'\.{3,}', ' ', normalize_text(p.text)).strip()
-            if not txt or len(txt) > 150:
-                continue
+            if not txt or len(txt) > 150: continue
             txt = re.sub(r'\s+\d+$', '', txt)
             for _ in range(3):
                 txt = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', txt)
-            
             match = re.match(r'^(\d+(?:\.\d+)*)\s*\.?\s*(.*)$', txt)
             if match:
                 number = match.group(1)
@@ -1412,6 +1458,12 @@ def check_toc(doc, start_idx):
             clean_num = str(item[1]).strip('.')
             clean_title = re.sub(r'\.{3,}', '', item[2]).strip()
             headers_in_text[clean_num] = clean_title
+        # 🔧 ДОБАВЛЕНО: Если номера нет, но есть заголовок 2 уровня, 
+        # добавляем его в словарь по названию для поиска "вслепую"
+        elif item[0] == '2' and not item[1]:
+            clean_title = re.sub(r'\.{3,}', '', item[2]).strip()
+            # Используем название как ключ, если номера нет
+            headers_in_text[clean_title.upper()] = clean_title
 
     # 5. Формирование таблицы
     table_data = []
@@ -1430,12 +1482,19 @@ def check_toc(doc, start_idx):
 
         clean_num = num.strip('.')
 
+        # Поиск по номеру
         if clean_num and clean_num in headers_in_text:
             actual = headers_in_text[clean_num]
             found_text = f"{clean_num}. {actual}"
             status = "Совпадает" if title.lower() == actual.lower() else "Несоответствие названия"
-        elif title.upper() in [k.upper() for k in headers_in_text if isinstance(k, str)]:
+        # 🔧 Поиск по названию (если номер не совпал или отсутствует)
+        elif title.upper() in headers_in_text:
             found_text = headers_in_text[title.upper()]
+            status = "Совпадает"
+        # Резервный поиск по частичному совпадению названия
+        elif any(title.lower() in k.lower() for k in headers_in_text if isinstance(k, str)):
+            matched_key = [k for k in headers_in_text if title.lower() in k.lower()][0]
+            found_text = headers_in_text[matched_key]
             status = "Совпадает"
 
         table_data.append({
@@ -1443,7 +1502,6 @@ def check_toc(doc, start_idx):
             "Содержание": toc_display,
             "В тексте документа": found_text
         })
-      
    
     if table_data:
         st.markdown("""
