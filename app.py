@@ -227,9 +227,15 @@ def extract_toc_entries_clean(doc, start_idx=0):
         clean_text = re.sub(r'\.{3,}', ' ', full_text)   # очистка
         clean_text = re.sub(r'\s*\d+\s*$', '', clean_text)
         clean_text = re.sub(r'\s+', ' ', clean_text).strip().rstrip('.')
+        
+        # 👇 ИСПРАВЛЕНИЕ: Убираем лишние пробелы между номером и точкой (например, "1 . Текст" -> "1. Текст")
+        clean_text = re.sub(r'(\d+(?:\.\d+)*)\s*\.\s*', r'\1. ', clean_text)
+        
         if len(clean_text) < 3: continue
 
-        match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', clean_text)
+        # 👇 ИЗМЕНЕНО: Добавлен \.? чтобы корректно отделять номер от заголовка
+        match = re.match(r'^(\d+(?:\.\d+)*)\s*\.?\s*(.*)$', clean_text)
+        
         if match:
             toc_items.append((match.group(1).strip(), match.group(2).strip()))
         else:
@@ -1344,13 +1350,28 @@ def check_toc(doc, start_idx):
             toc_entries.append((None, title, "?", 'special'))
 
     
+   
     if not toc_entries and toc_lines:
         for p in toc_lines:
             txt = re.sub(r'\.{3,}', ' ', normalize_text(p.text)).strip()
             if not txt or len(txt) > 150:
                 continue
             txt = re.sub(r'\s+\d+$', '', txt)
+            
+            # 👇 ИСПРАВЛЕНИЕ: Убираем лишние пробелы между номером и точкой
+            txt = re.sub(r'(\d+(?:\.\d+)*)\s*\.\s*', r'\1. ', txt)
+            
+            # 👇 ИЗМЕНЕНО: Добавлен \.? 
+            match = re.match(r'^(\d+(?:\.\d+)*)\s*\.?\s*(.*)$', txt)
+            
+        for p in toc_lines:
+            txt = re.sub(r'\.{3,}', ' ', normalize_text(p.text)).strip()
+            if not txt or len(txt) > 150:
+                continue
+            txt = re.sub(r'\s+\d+$', '', txt)
             match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', txt)
+            
+            
             if match:
                 number = match.group(1)
                 title = match.group(2).strip()
