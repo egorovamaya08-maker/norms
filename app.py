@@ -850,7 +850,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
         for i in range(current_idx - 1, -1, -1):
             p = doc.paragraphs[i]
             text = p.text.strip()
-            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc))):
+            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc)):
                 prev_section_idx = i
                 break
         
@@ -921,7 +921,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
             p = doc.paragraphs[i]
             text = p.text.strip()
             
-            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc))):
+            if text and (smart_is_section_header(text, doc)) or smart_is_subsection_header(text, doc)):
                 prev_section_idx = i
                 break
         
@@ -992,7 +992,7 @@ def is_on_new_page(doc, body_idx, start_body_pos=0, min_empty_paragraphs=10):
         for i in range(current_idx - 1, -1, -1):
             p = doc.paragraphs[i]
             text = p.text.strip()
-            if text and smart_is_section_header(text, doc)):
+            if text and smart_is_section_header(text, doc):
                 prev_section_idx = i
                 break
         
@@ -1273,7 +1273,7 @@ def check_toc(doc, start_idx):
         txt = normalize_text(doc.paragraphs[i].text).strip()
         if not txt:
             continue
-        if smart_is_section_header(txt, doc)) and not txt.rstrip('.').endswith('.'):
+        if smart_is_section_header(txt, doc) and not txt.rstrip('.').endswith('.'):
             intro_end_idx = i
             break
 
@@ -1302,7 +1302,7 @@ def check_toc(doc, start_idx):
             continue
 
         # Заголовки 1 уровня
-        if smart_is_section_header(txt, doc)) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
+        if smart_is_section_header(txt, doc) or re.match(r'^\d+\s+[А-ЯЁ]', txt):
             num_match = re.match(r'^(\d+)', txt)
             num = num_match.group(1) if num_match else ""
             title = re.sub(r'^\d+[\.\s]*', '', txt).strip()
@@ -1500,7 +1500,7 @@ def check_word_document(file):
             continue
         if has_page_number(txt):
             continue
-        if txt.upper() == "ВВЕДЕНИЕ" and smart_is_section_header(txt, doc)):
+        if txt.upper() == "ВВЕДЕНИЕ" and smart_is_section_header(txt, doc):
             intro_found = True
             start_idx = i
             intro_start_i = i
@@ -1514,7 +1514,7 @@ def check_word_document(file):
                 continue
             if has_page_number(txt):
                 continue
-            if smart_is_section_header(txt, doc)):
+            if smart_is_section_header(txt, doc):
                 start_idx = i
                 break
         
@@ -1629,7 +1629,7 @@ def check_word_document(file):
             is_level1 = True
         elif re.match(r'^[1-9]\d*\s+[А-ЯA-Z]', text):
             is_level1 = True
-        elif smart_is_section_header(norm_text, doc)):
+        elif smart_is_section_header(norm_text, doc):
             is_level1 = True
 
         
@@ -1855,7 +1855,7 @@ def check_word_document(file):
                 prev_p = doc.paragraphs[idx - 1]
                 prev_txt = prev_p.text.strip()
                 # Если предыдущий параграф не пустой и является заголовком раздела (уровня 1)
-                if prev_txt and smart_is_section_header(prev_txt, doc)):
+                if prev_txt and smart_is_section_header(prev_txt, doc):
                     # Добавляем замечание, так как перед подразделом нет пустой строки
                     auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
             
@@ -1874,7 +1874,7 @@ def check_word_document(file):
                         body_idx = -1
                     if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
                         pass
-                    elif smart_is_section_header(prev_txt, doc)) or re.match(r'^\d+\.\d+', prev_txt):
+                    elif smart_is_section_header(prev_txt, doc) or re.match(r'^\d+\.\d+', prev_txt):
                         auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
                     else:
                         manual_issues.append(
@@ -2123,7 +2123,7 @@ def improved_is_section_header(paragraph, doc=None, **kwargs) -> bool:
         alignment = get_effective_alignment(paragraph)
         if alignment in (WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT):
             return True
-    if smart_is_section_header(text, **kwargs, doc)):
+    if smart_is_section_header(text, **kwargs, doc):
         if text.rstrip().endswith('.'):
             return False
         return True
