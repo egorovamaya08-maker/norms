@@ -47,7 +47,8 @@ def clean_header_text(text: str) -> str:
     # Схлопываем множественные пробелы в один
     text = re.sub(r'\s+', ' ', text)
     # Убираем точку в конце номера подраздела, если она там есть (например: "1.1. текст" -> "1.1 текст")
-    text = re.sub(r'^(\d+(?:\.\d+)+)\.\s+', r'\1 ', text)
+    text = re.sub(r'^(\d+(?:\.\d+)+)\s*\.\s+', r'\1 ', text)
+    
     return text.strip()
 
 def normalize_text(text):
@@ -2166,7 +2167,7 @@ def smart_is_subsection_header(text_or_paragraph, doc=None) -> bool:
             return False
         if is_special_text(text):
             return False
-         return original_smart_is_subsection_header(text, doc)
+        return original_smart_is_subsection_header(text, doc)
         
 
 def check_paragraph_indent(paragraph, is_heading: bool = False, is_list_item: bool = False) -> Optional[str]:
