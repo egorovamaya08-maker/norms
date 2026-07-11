@@ -1690,11 +1690,7 @@ def check_word_document(file):
             is_level1 = True
 
         
-        is_subsection = False
-        if 'heading 2' in style_name or 'заголовок 2' in style_name or 'heading 3' in style_name or 'заголовок 3' in style_name:
-            is_subsection = True
-        elif re.match(r'^\d+(\.\d+)+\.?\s+', text):
-            is_subsection = True
+        is_subsection = improved_is_subsection_header(p, doc)
 
         # подраздел не может быть разделом 1 уровня
         if is_subsection:
