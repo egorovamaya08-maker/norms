@@ -1335,6 +1335,10 @@ def check_toc(doc, start_idx):
                 num = num_match.group(1)
                 title = re.sub(r'^\d+\.\d+(?:\.\d+)*[\.\s]*', '', txt).strip()
                 doc_headers.append(('2', num, title, True))
+        else:
+        # Отладка: покажем первые 100 символов текста, который не распознан
+            if re.match(r'^\d+\.', txt) and len(txt) > 10:
+                st.write(f"⚠️ DEBUG: Не распознан текст: '{txt[:100]}...'")
 
     
     toc_entries = []
@@ -1390,6 +1394,10 @@ def check_toc(doc, start_idx):
             clean_num = str(item[1]).strip('.')
             clean_title = re.sub(r'\.{3,}', '', item[2]).strip()
             headers_in_text[clean_num] = clean_title
+    st.write(f" DEBUG: Найдено заголовков в тексте: {len(headers_in_text)}")
+    for num, title in sorted(headers_in_text.items()):
+        st.write(f"   - {num}: '{title[:60]}...'")
+
 
     table_data = []
     for entry in toc_entries:
