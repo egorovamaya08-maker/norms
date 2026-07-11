@@ -2045,32 +2045,7 @@ def check_word_document(file):
     
     return group_issues(all_issues)
 
-uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
 
-if uploaded_file is not None:
-    with st.spinner("Проверяем..."):
-        results = check_word_document(uploaded_file)
-    
-    st.subheader("Результаты проверки основного текста:")
-    
-    manual_mode = False
-    auto_errors = []
-    manual_items = []
-    
-    for r in results:
-        if r.startswith("📋 Для проверки человеком:"):
-            manual_mode = True
-            continue
-        if manual_mode:
-            manual_items.append(r)
-        else:
-            auto_errors.append(r)
-    
-    if auto_errors:
-        for err in auto_errors:
-            st.write(f"• {err}")
-    else:
-        st.success("✅ Автоматических ошибок не найдено.")
     
     # 👇 ВЕСЬ ОСТАЛЬНОЙ КОД ДОЛЖЕН БЫТЬ ВНУТРИ ЭТОГО БЛОКА (с отступом в 4 пробела)
     st.markdown("---")
