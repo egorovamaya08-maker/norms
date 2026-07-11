@@ -2147,7 +2147,7 @@ def improved_is_subsection_header(paragraph, doc=None) -> bool:
     style_name = paragraph.style.name if paragraph.style else ""
     if style_name in {'Heading 2', 'Heading 3', 'Заголовок 2', 'Заголовок 3'}:
         return True
-    if smart_is_subsection_header(text, doc)):
+    if smart_is_subsection_header(text, doc):
         return True
     if re.match(r'^\d+(\.\d+)+[\.\)\\s]', text):
         is_bold = is_paragraph_bold(paragraph)
