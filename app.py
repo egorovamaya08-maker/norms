@@ -814,7 +814,7 @@ def check_empty_line_before_after(doc, idx, start_idx, label):
             errors.append(f"{label} – добавьте пустую строку после подписи")
     return errors
 
-def smart_is_subsection_header(text, doc):
+def original_smart_is_subsection_header(text, doc):
     if re.match(r'^\d+\.\d+(\.\d+)?\s+', text.strip()):
         return True
     return False
@@ -2166,7 +2166,8 @@ def smart_is_subsection_header(text_or_paragraph, doc=None) -> bool:
             return False
         if is_special_text(text):
             return False
-        return smart_is_subsection_header(text, doc)
+         return original_smart_is_subsection_header(text, doc)
+        
 
 def check_paragraph_indent(paragraph, is_heading: bool = False, is_list_item: bool = False) -> Optional[str]:
     """Проверяет абзацный отступ (1 см)."""
