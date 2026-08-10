@@ -84,15 +84,34 @@ def get_effective_alignment(paragraph):
     return None
 
 def is_paragraph_bold(paragraph):
+    # 1. Проверка через runs (явное форматирование)
     runs = [r for r in paragraph.runs if r.text.strip()]
     if runs:
         if any(r.bold for r in runs):
             return True
+
+    # 2. Проверка через цепочку стилей (style → base_style → ...)
     try:
-        if paragraph.style and paragraph.style.font and paragraph.style.font.bold:
-            return True
-    except:
+        current_style = paragraph.style
+        while current_style is not None:
+            if current_style.font and current_style.font.bold:
+                return True
+            # Проверяем XML стиля на наличие <w:b/>
+            if hasattr(current_style, '_element') and current_style._element is not None:
+                rPr = current_style._element.find(qn('w:rPr'))
+                if rPr is not None:
+                    bold_elem = rPr.find(qn('w:b'))
+                    if bold_elem is not None:
+                        val = bold_elem.get(qn('w:val'))
+                        if val != 'false' and val != '0':
+                            return True
+                        if val is None:
+                            return True
+            current_style = current_style.base_style
+    except Exception:
         pass
+
+    # 3. Проверка через XML параграфа (pPr → rPr → b)
     try:
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
@@ -103,16 +122,34 @@ def is_paragraph_bold(paragraph):
                     val = bold_elem.get(qn('w:val'))
                     if val != 'false' and val != '0':
                         return True
-            for r in paragraph._element.findall(qn('w:r')):
-                rPr = r.find(qn('w:rPr'))
-                if rPr is not None:
-                    bold_elem = rPr.find(qn('w:b'))
-                    if bold_elem is not None:
-                        val = bold_elem.get(qn('w:val'))
-                        if val != 'false' and val != '0':
-                            return True
-    except:
+                    if val is None:
+                        return True
+    except Exception:
         pass
+
+    # 4. Проверка через XML каждого run
+    try:
+        for r in paragraph._element.findall(qn('w:r')):
+            rPr = r.find(qn('w:rPr'))
+            if rPr is not None:
+                bold_elem = rPr.find(qn('w:b'))
+                if bold_elem is not None:
+                    val = bold_elem.get(qn('w:val'))
+                    if val != 'false' and val != '0':
+                        return True
+                    if val is None:
+                        return True
+    except Exception:
+        pass
+
+    # 5. Проверка: если стиль — Heading 1/2/3, считаем bold по умолчанию
+    try:
+        style_name = paragraph.style.name if paragraph.style else ""
+        if style_name and any(h in style_name.lower() for h in ['heading', 'заголовок']):
+            return True
+    except Exception:
+        pass
+
     return False
 
 def is_empty_paragraph(paragraph):
@@ -767,6 +804,10 @@ def check_page_numbering(file, intro_start_idx):
     return issues
 
 def get_category_order(issue):
+    if issue.startswith("Содержание"):
+        return (0, 0)
+    if issue.startswith("Отсутствует введение"):
+        return (0, 1)
     if issue.startswith("Таблицы –"):
         return (4, 0)
     if issue.startswith("Рисунки –"):
@@ -1802,7 +1843,7 @@ def check_section_title_additions(paragraph):
     next_p = get_next_paragraph(paragraph)
     if next_p is not None:
         if not (is_empty_paragraph(next_p) or has_spacing_after(paragraph, min_pt=12)):
-            errors.append(f"«{text}» – после заголовка должна быть пустая строка")
+            errors.append(f"«{text}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
     return errors
 
 def check_subsection_title_additions(paragraph):
@@ -1867,7 +1908,7 @@ def check_figure_numbering_additions(document):
         if sorted(figure_numbers) != expected:
             missing = sorted(set(expected) - set(figure_numbers))
             if missing:
-                errors.append(f"Рисунки – пропущен рисунок {', '.join(map(str, missing))}")
+                errors.append(f"Рисунки – пропущен рисунок {', '.join(map(str, missing))}. Проверьте нумерацию рисунков")
     return errors
 
 def check_table_caption_additions(paragraph):
@@ -1885,6 +1926,9 @@ def check_table_caption_additions(paragraph):
         errors.append(f"{key} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
     if text.rstrip().endswith("."):
         errors.append(f"{key} – удалите точку в конце названия")
+    first_line = get_effective_first_line_indent(paragraph)
+    if abs(first_line) > 0.1:
+        errors.append(f"{key} – уберите абзацный отступ (должен быть 0 см)")
     sizes = get_font_size_pt(paragraph)
     if sizes and any(abs(s - 14) > 0.5 for s in sizes):
         errors.append(f"{key} – установите размер шрифта 14 пт")
@@ -2367,7 +2411,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
 
             if not has_proper_spacing_after_header(doc, idx):
-                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
 
             if text.upper() == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
                 auto_issues.append(f"«{text[:50]}» – замените на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
@@ -2446,11 +2490,7 @@ def check_word_document(file):
     # Проверка последовательности нумерации таблиц
     auto_issues.extend(check_table_numbering_additions(doc))
 
-    # Проверка полей страниц (детальная)
-    auto_issues.extend(check_page_margins_additions(doc))
-
-    # Проверка маркеров списков
-    auto_issues.extend(check_list_markers_additions(doc))
+    # Проверка полей страниц и списков уже выполнены в основном цикле
 
     if indent_issues:
         if len(indent_issues) > 2:
@@ -2467,16 +2507,7 @@ def check_word_document(file):
         first_text = list_errors[0][1]
         auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
 
-    if figure_numbers_found:
-        int_nums = sorted(set(int(n) for n in figure_numbers_found if n == int(n)))
-        if int_nums:
-            if int_nums[0] != 1:
-                auto_issues.append("Рисунки – нумерация должна начинаться с 1")
-            else:
-                for expected in range(1, int_nums[-1] + 1):
-                    if expected not in int_nums:
-                        auto_issues.append(f"Рисунки – пропущен рисунок {expected}")
-                        break
+
 
     table_seq_issues = []
     if table_numbers_found:
@@ -2849,4 +2880,3 @@ if uploaded_file is not None:
                 st.write(f"• {item}")
     
     st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
-    
