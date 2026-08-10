@@ -2392,6 +2392,7 @@ def check_word_document(file):
         if is_level1:
             auto_issues.extend(check_chapter_word(p))
             key = text[:80]
+            # Проверка: каждый раздел (кроме ВВЕДЕНИЯ) должен начинаться с новой страницы
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
                 if body_idx is not None and not is_on_new_page(doc, body_idx, start_body_pos):
@@ -2410,8 +2411,8 @@ def check_word_document(file):
             if text.endswith("."):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
 
-            if not has_proper_spacing_after_header(doc, idx):
-                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
+            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
 
             if text.upper() == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
                 auto_issues.append(f"«{text[:50]}» – замените на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
@@ -2422,9 +2423,6 @@ def check_word_document(file):
             key = f"Подраздел «{sub_name[:50]}»"
             first_line = get_effective_first_line_indent(p)
 
-            # Если отступ не задан локально (унаследован из стиля), пропускаем проверку
-            if p.paragraph_format.first_line_indent is None:
-                first_line = 1.0   # принудительно устанавливаем правильное значение
             
             if abs(first_line - 1.0) > 0.2:
                 auto_issues.append(f"{key} – установите абзацный отступ 1,0 см (сейчас {first_line:.1f} см)")
@@ -2434,6 +2432,8 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
+            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
+                auto_issues.append(f"{key} – после подраздела должна быть пустая строка")
 
             # Проверка пустой строки перед подразделом
             # Проверка пустой строки перед подразделом
@@ -2624,7 +2624,7 @@ def check_word_document(file):
         all_issues.append("📋 Для проверки человеком:")
         all_issues.extend(all_manual)
     
-    return group_issues(all_issues)
+    return group_issues(all_issues), intro_found
 
 
 # =============================================================================
