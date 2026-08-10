@@ -1802,7 +1802,7 @@ def check_section_title_additions(paragraph):
     next_p = get_next_paragraph(paragraph)
     if next_p is not None:
         if not (is_empty_paragraph(next_p) or has_spacing_after(paragraph, min_pt=12)):
-            errors.append(f"«{text}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
+            errors.append(f"«{text}» – после заголовка должна быть пустая строка")
     return errors
 
 def check_subsection_title_additions(paragraph):
