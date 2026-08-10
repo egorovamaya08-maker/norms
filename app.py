@@ -2367,7 +2367,7 @@ def check_word_document(file):
                 auto_issues.append(f"«{key}» – удалите точку в конце")
 
             if not has_proper_spacing_after_header(doc, idx):
-                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
+                auto_issues.append(f"«{key}» – после заголовка должна быть пустая строка")
 
             if text.upper() == "СПИСОК ИСПОЛЬЗОВАННОЙ ЛИТЕРАТУРЫ":
                 auto_issues.append(f"«{text[:50]}» – замените на «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ»")
