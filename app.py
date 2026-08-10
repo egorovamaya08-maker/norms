@@ -426,6 +426,193 @@ def is_formula_or_equation(text):
 def is_formula_where_line(text):
     return bool(re.match(r'^[Гг]де\s*[:\s]?\s*[А-Яа-яA-Za-z\-–—]', text))
 
+# =============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (добавлено из app_norms_additions)
+# =============================================================================
+
+def find_text(document, text):
+    """Находит параграф с указанным текстом (без учёта регистра)"""
+    for p in document.paragraphs:
+        if p.text.strip().upper() == text.upper():
+            return p
+    return None
+
+def find_text_with_pattern(document, pattern):
+    """Находит параграфы, соответствующие регулярному выражению"""
+    results = []
+    for p in document.paragraphs:
+        if re.match(pattern, p.text.strip()):
+            results.append(p)
+    return results
+
+def is_real_toc(document):
+    """Проверяет, является ли оглавление автоматически сгенерированным (поле TOC)"""
+    body = document.element.body
+    for instr in body.findall('.//w:instrText', NSMAP):
+        if instr.text and 'TOC' in instr.text.upper():
+            return True
+    return False
+
+def get_next_paragraph(paragraph):
+    """Возвращает следующий параграф в документе"""
+    parent = paragraph._element.getparent()
+    if parent is None:
+        return None
+    children = list(parent.iterchildren())
+    try:
+        idx = children.index(paragraph._element)
+        if idx + 1 < len(children):
+            next_elem = children[idx + 1]
+            if next_elem.tag == qn('w:p'):
+                for p in paragraph.part.document.paragraphs:
+                    if p._element is next_elem:
+                        return p
+    except ValueError:
+        pass
+    return None
+
+def get_previous_paragraph(paragraph):
+    """Возвращает предыдущий параграф в документе"""
+    parent = paragraph._element.getparent()
+    if parent is None:
+        return None
+    children = list(parent.iterchildren())
+    try:
+        idx = children.index(paragraph._element)
+        if idx > 0:
+            prev_elem = children[idx - 1]
+            if prev_elem.tag == qn('w:p'):
+                for p in paragraph.part.document.paragraphs:
+                    if p._element is prev_elem:
+                        return p
+    except ValueError:
+        pass
+    return None
+
+def has_spacing_after(paragraph, min_pt=12):
+    """Проверяет, есть ли интервал после параграфа >= min_pt"""
+    try:
+        pf = paragraph.paragraph_format
+        if pf.space_after and pf.space_after.pt >= min_pt:
+            return True
+    except:
+        pass
+    try:
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            spacing = pPr.find(qn('w:spacing'))
+            if spacing is not None:
+                after = spacing.get(qn('w:after'))
+                if after and int(after) >= min_pt * 20:
+                    return True
+    except:
+        pass
+    return False
+
+def is_table_after(paragraph):
+    """Проверяет, следует ли за параграфом таблица (с учётом пустых строк)"""
+    parent = paragraph._element.getparent()
+    if parent is None:
+        return False
+    children = list(parent.iterchildren())
+    try:
+        idx = children.index(paragraph._element)
+        for i in range(idx + 1, len(children)):
+            if children[i].tag == qn('w:tbl'):
+                return True
+            if children[i].tag == qn('w:p'):
+                # Проверяем, пустой ли параграф
+                is_empty = True
+                for p in paragraph.part.document.paragraphs:
+                    if p._element is children[i]:
+                        is_empty = is_empty_paragraph(p)
+                        break
+                if not is_empty:
+                    return False
+    except ValueError:
+        pass
+    return False
+
+def find_all_figures(document):
+    """Находит все параграфы с подписями рисунков"""
+    figures = []
+    for p in document.paragraphs:
+        if is_figure_caption(p):
+            figures.append(p)
+    return figures
+
+def extract_figure_number(text):
+    """Извлекает номер рисунка из текста (целое число)"""
+    m = re.search(r'(?:Рисунок|Рис\.)\s*(\d+)', text, re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+def get_table_caption_elem(table):
+    """Находит подпись таблицы (параграф перед таблицей)"""
+    parent = table._element.getparent()
+    children = list(parent.iterchildren())
+    try:
+        idx = children.index(table._element)
+        if idx > 0:
+            prev_elem = children[idx - 1]
+            if prev_elem.tag == qn('w:p'):
+                for p in table.part.document.paragraphs:
+                    if p._element is prev_elem:
+                        return p
+    except ValueError:
+        pass
+    return None
+
+def extract_table_number(text):
+    """Извлекает номер таблицы из текста (целое число)"""
+    m = re.search(r'Таблица\s+(\d+)', text, re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+def is_formula_explanation_para(paragraph):
+    """Проверяет, является ли параграф пояснением к формуле"""
+    return is_formula_where_line(paragraph.text)
+
+def is_main_text_para(paragraph, doc):
+    """Проверяет, является ли параграф основным текстом"""
+    text = paragraph.text.strip()
+    if not text:
+        return False
+    if smart_is_section_header(paragraph, doc) or smart_is_subsection_header(paragraph, doc):
+        return False
+    if is_figure_caption(paragraph) or is_table_caption(paragraph):
+        return False
+    if is_formula_explanation_para(paragraph):
+        return False
+    if is_table_continuation(text):
+        return False
+    is_list, _, _ = get_list_marker_info(paragraph, doc)
+    if is_list:
+        return False
+    return True
+
+def is_list_item_func(paragraph, doc):
+    """Проверяет, является ли параграф элементом списка"""
+    is_list, _, _ = get_list_marker_info(paragraph, doc)
+    return is_list
+
+def find_heading(document, text):
+    """Находит заголовок с указанным текстом"""
+    for p in document.paragraphs:
+        if p.text.strip().upper() == text.upper():
+            if is_heading(p):
+                return p
+    return None
+
+
 def check_formula_explanation(text, paragraph, prev_was_formula, prev_para_empty):
     errors = []
     short_text = text[:60] + "…" if len(text) > 60 else text
@@ -1579,6 +1766,255 @@ def check_toc(doc, start_idx):
     return errors
 
 
+
+# =============================================================================
+# ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ (из app_norms_additions.py)
+# =============================================================================
+
+def check_toc_additions(document):
+    """Дополнительные проверки оглавления"""
+    errors = []
+    toc_title = find_text(document, "СОДЕРЖАНИЕ")
+    if toc_title:
+        if get_effective_alignment(toc_title) != WD_ALIGN_PARAGRAPH.CENTER:
+            errors.append("СОДЕРЖАНИЕ – выровняйте заголовок по центру")
+        sizes = get_font_size_pt(toc_title)
+        if sizes and any(abs(s - 14) > 0.5 for s in sizes):
+            errors.append("СОДЕРЖАНИЕ – установите размер шрифта 14 пт")
+
+    toc_items = find_text_with_pattern(document, r"^[А-ЯA-Z]+[А-Яа-яA-Za-z\s]+\.+\d+$")
+    if toc_items and not is_real_toc(document):
+        errors.append("СОДЕРЖАНИЕ – оформите содержимое как автоматически сгенерированное (вставка > Оглавление)")
+    return errors
+
+def check_section_title_additions(paragraph):
+    """Дополнительные проверки заголовков разделов"""
+    errors = []
+    text = paragraph.text.strip()
+    if not text:
+        return errors
+    if not is_paragraph_bold(paragraph):
+        errors.append(f"«{text}» – заголовок раздела должен быть полужирным")
+    if get_effective_alignment(paragraph) != WD_ALIGN_PARAGRAPH.CENTER:
+        errors.append(f"«{text}» – выровняйте заголовок по центру")
+    if text.endswith("."):
+        errors.append(f"«{text}» – удалите точку в конце")
+    next_p = get_next_paragraph(paragraph)
+    if next_p is not None:
+        if not (is_empty_paragraph(next_p) or has_spacing_after(paragraph, min_pt=12)):
+            errors.append(f"«{text}» – после заголовка должна быть пустая строка (или интервал после ≥ 12 pt)")
+    return errors
+
+def check_subsection_title_additions(paragraph):
+    """Дополнительные проверки подразделов"""
+    errors = []
+    text = paragraph.text.strip()
+    if not text:
+        return errors
+    if get_effective_alignment(paragraph) != WD_ALIGN_PARAGRAPH.JUSTIFY:
+        errors.append(f"Подраздел «{text}» – выровняйте по ширине")
+    if text.endswith("."):
+        errors.append(f"Подраздел «{text}» – удалите точку в конце")
+    first_line = get_effective_first_line_indent(paragraph)
+    if abs(first_line - 1.0) > 0.2:
+        errors.append(f"Подраздел «{text}» – установите абзацный отступ 1,0 см")
+    return errors
+
+def check_figure_caption_additions(paragraph):
+    """Дополнительные проверки подписей рисунков"""
+    errors = []
+    text = paragraph.text.strip()
+    if not text:
+        return errors
+    fig_match = re.search(r'(?:Рисунок|Рис\.)\s*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
+    fig_num = fig_match.group(1) if fig_match else "?"
+    fig_label = f"Рисунок {fig_num}"
+
+    if text.startswith("Рис."):
+        errors.append(f"{fig_label} – измените «Рис.» на «Рисунок»")
+    if text.endswith(".") and not re.search(r'\([^)]*\)\.$', text):
+        errors.append(f"{fig_label} – удалите точку в конце")
+    sizes = get_font_size_pt(paragraph)
+    if sizes and any(abs(s - 14) > 0.5 for s in sizes):
+        errors.append(f"{fig_label} – установите размер шрифта 14 пт")
+    if get_effective_alignment(paragraph) != WD_ALIGN_PARAGRAPH.CENTER:
+        errors.append(f"{fig_label} – выровняйте подпись по центру")
+    next_p = get_next_paragraph(paragraph)
+    if next_p is not None and not is_empty_paragraph(next_p):
+        errors.append(f"{fig_label} – добавьте пустую строку после подписи")
+    first_line = get_effective_first_line_indent(paragraph)
+    if abs(first_line) > 0.1:
+        errors.append(f"{fig_label} – уберите абзацный отступ (должен быть 0 см)")
+    m = re.match(r'^(?:Рисунок|Рис\.)\s+\d+(?:\.\d+)?\s*[–—]\s*(.+)$', text)
+    if m:
+        title = m.group(1).strip()
+        if title and title[0].islower():
+            errors.append(f"{fig_label} – название должно начинаться с большой буквы")
+    return errors
+
+def check_figure_numbering_additions(document):
+    """Проверка последовательности нумерации рисунков"""
+    errors = []
+    figures = find_all_figures(document)
+    figure_numbers = []
+    for fig in figures:
+        num = extract_figure_number(fig.text)
+        if num is not None:
+            figure_numbers.append(num)
+
+    if figure_numbers:
+        expected = list(range(1, len(figure_numbers) + 1))
+        if sorted(figure_numbers) != expected:
+            missing = sorted(set(expected) - set(figure_numbers))
+            if missing:
+                errors.append(f"Рисунки – пропущен рисунок {', '.join(map(str, missing))}")
+    return errors
+
+def check_table_caption_additions(paragraph):
+    """Дополнительные проверки подписей таблиц"""
+    errors = []
+    text = paragraph.text.strip()
+    if not text or not text.lower().startswith("таблица"):
+        return errors
+
+    tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', text, re.IGNORECASE)
+    tbl_num = tbl_match.group(1) if tbl_match else "?"
+    key = f"Таблица {tbl_num}"
+
+    if ": " in text:
+        errors.append(f"{key} – используйте тире между номером и названием (например, «Таблица 5 – Название»)")
+    if text.rstrip().endswith("."):
+        errors.append(f"{key} – удалите точку в конце названия")
+    sizes = get_font_size_pt(paragraph)
+    if sizes and any(abs(s - 14) > 0.5 for s in sizes):
+        errors.append(f"{key} – установите размер шрифта 14 пт")
+    prev_p = get_previous_paragraph(paragraph)
+    if prev_p is not None and not is_empty_paragraph(prev_p):
+        errors.append(f"{key} – добавьте пустую строку перед подписью")
+    next_p = get_next_paragraph(paragraph)
+    if next_p is not None and not is_empty_paragraph(next_p):
+        errors.append(f"{key} – добавьте пустую строку после подписи")
+    if is_table_after(paragraph):
+        errors.append(f"{key} – название должно быть ПЕРЕД таблицей")
+    return errors
+
+def check_table_numbering_additions(document):
+    """Проверка последовательности нумерации таблиц"""
+    errors = []
+    tables = document.tables
+    table_numbers = []
+    for table in tables:
+        caption = get_table_caption_elem(table)
+        if caption:
+            number = extract_table_number(caption.text)
+            if number is not None:
+                table_numbers.append(number)
+
+    if table_numbers:
+        expected = list(range(1, len(table_numbers) + 1))
+        if sorted(table_numbers) != expected:
+            missing = sorted(set(expected) - set(table_numbers))
+            if missing:
+                errors.append(f"Таблицы – пропущена таблица {', '.join(map(str, missing))}")
+    return errors
+
+def check_formula_explanation_additions(paragraph):
+    """Дополнительные проверки пояснений к формулам"""
+    errors = []
+    text = paragraph.text.strip()
+    if not text:
+        return errors
+    short_text = text[:60] + "…" if len(text) > 60 else text
+    key = f"Пояснение к формуле «{short_text}»"
+
+    if text.startswith("Где"):
+        errors.append(f"{key} – «где» должно быть с маленькой буквы")
+    if re.match(r'^[Гг]де\s*:', text):
+        errors.append(f"{key} – уберите двоеточие после «где»")
+    first_line = get_effective_first_line_indent(paragraph)
+    if abs(first_line - 1.0) > 0.2:
+        errors.append(f"{key} – установите абзацный отступ 1,0 см")
+    return errors
+
+def check_page_margins_additions(document):
+    """Проверка полей страниц (20 мм) — дублирует существующую, но с точными сообщениями"""
+    errors = []
+    for section in document.sections:
+        if abs(section.left_margin.mm - 20) > 0.5:
+            errors.append("Поля страниц – установите левое поле 20 мм")
+        if abs(section.right_margin.mm - 20) > 0.5:
+            errors.append("Поля страниц – установите правое поле 20 мм")
+        if abs(section.top_margin.mm - 20) > 0.5:
+            errors.append("Поля страниц – установите верхнее поле 20 мм")
+        if abs(section.bottom_margin.mm - 20) > 0.5:
+            errors.append("Поля страниц – установите нижнее поле 20 мм")
+    return errors
+
+def check_main_text_additions(paragraph):
+    """Проверка основного текста — абзацный отступ"""
+    errors = []
+    first_line = get_effective_first_line_indent(paragraph)
+    if abs(first_line - 1.0) > 0.2:
+        errors.append("Основной текст – установите абзацный отступ 1,0 см")
+    return errors
+
+def check_list_markers_additions(document):
+    """Проверка маркеров списков (круглый маркер)"""
+    errors = []
+    for paragraph in document.paragraphs:
+        is_list, marker, valid = get_list_marker_info(paragraph, document)
+        if is_list and marker == "круглый маркер (•)":
+            errors.append("Список – замените круглый маркер (•) на тире, букву или цифру")
+    return errors
+
+def check_introduction_additions(document):
+    """Проверка наличия введения как заголовка"""
+    errors = []
+    found = False
+    for p in document.paragraphs:
+        txt = p.text.strip()
+        if txt.upper() == "ВВЕДЕНИЕ":
+            if is_heading(p) or smart_is_section_header(txt, document):
+                found = True
+                break
+    if not found:
+        errors.append("Отсутствует введение, оформленное как заголовок. Проверка начинается с первого найденного раздела.")
+    return errors
+
+def check_chapter_word(paragraph):
+    """Проверка слова 'Глава' в заголовках разделов"""
+    errors = []
+    text = paragraph.text.strip()
+    if not text:
+        return errors
+    if "Глава" in text and is_heading(paragraph):
+        errors.append(f"«{text}» – слово «Глава» необходимо убрать из названия раздела")
+    return errors
+
+def group_errors_additions(errors):
+    """Группировка ошибок по приоритетам"""
+    priority = {
+        "СОДЕРЖАНИЕ": 0,
+        "Отсутствует введение": 1,
+        "раздел": 2,
+        "Подраздел": 3,
+        "Таблица": 4,
+        "Таблицы": 4,
+        "Рисунок": 5,
+        "Рисунки": 5,
+        "Пояснение к формуле": 6,
+        "Поля страниц": 7,
+        "Основной текст": 8,
+        "Список": 9,
+        "Глава": 10,
+    }
+    def get_priority(error):
+        for key, value in priority.items():
+            if key in error:
+                return value
+        return 11
+    return sorted(errors, key=get_priority)
+
 def check_word_document(file):
     doc = docx.Document(file)
     auto_issues = []
@@ -1910,6 +2346,7 @@ def check_word_document(file):
 
         # Проверка заголовков 1 уровня
         if is_level1:
+            auto_issues.extend(check_chapter_word(p))
             key = text[:80]
             if text.upper() != "ВВЕДЕНИЕ":
                 body_idx = para_to_body_idx.get(idx)
@@ -1996,6 +2433,25 @@ def check_word_document(file):
             prev_para_empty = True
 
     
+    # =============================================================================
+    # ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ (из app_norms_additions.py)
+    # =============================================================================
+
+    # Проверка автоматического оглавления
+    auto_issues.extend(check_toc_additions(doc))
+
+    # Проверка последовательности нумерации рисунков
+    auto_issues.extend(check_figure_numbering_additions(doc))
+
+    # Проверка последовательности нумерации таблиц
+    auto_issues.extend(check_table_numbering_additions(doc))
+
+    # Проверка полей страниц (детальная)
+    auto_issues.extend(check_page_margins_additions(doc))
+
+    # Проверка маркеров списков
+    auto_issues.extend(check_list_markers_additions(doc))
+
     if indent_issues:
         if len(indent_issues) > 2:
             first_key, first_indent = indent_issues[0]
@@ -2394,4 +2850,3 @@ if uploaded_file is not None:
     
     st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
     
-   
