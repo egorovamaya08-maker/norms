@@ -2842,8 +2842,11 @@ uploaded_file = st.file_uploader("Выберите файл", type=["docx"])
 
 if uploaded_file is not None:
     with st.spinner("Проверяем..."):
-        results = check_word_document(uploaded_file)
+        results, intro_found = check_word_document(uploaded_file)
     
+    if not intro_found:
+        st.info("ℹ️ Отсутствует введение, оформленное как заголовок. Проверка начинается с первого найденного раздела.")
+
     st.subheader("Результаты проверки основного текста:")
     
     manual_mode = False
@@ -2880,3 +2883,4 @@ if uploaded_file is not None:
                 st.write(f"• {item}")
     
     st.info("💬 Сообщение для человека: проверьте, пожалуйста, машине не всегда можно доверять")
+    
