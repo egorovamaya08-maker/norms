@@ -2434,11 +2434,12 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – выровняйте по ширине")
             if text.endswith("."):
                 auto_issues.append(f"{key} – удалите точку в конце")
-            if idx + 1 < len(doc.paragraphs) and not is_empty_paragraph(doc.paragraphs[idx + 1]):
-                auto_issues.append(f"{key} – после подраздела должна быть пустая строка")
-
-            # Проверка пустой строки перед подразделом
-            # Проверка пустой строки перед подразделом
+           
+            # По ГОСТ после подраздела НЕ должно быть пустой строки
+            if is_empty_paragraph(doc.paragraphs[idx + 1]):
+                auto_issues.append(f"{key} – уберите пустую строку после подраздела (пустая строка допускается только после разделов)")
+    
+          
             # Проверка пустой строки перед подразделом
             if idx > 0:
                 prev_p = doc.paragraphs[idx - 1]
