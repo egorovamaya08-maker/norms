@@ -1768,9 +1768,11 @@ def check_toc(doc, start_idx):
         }
         </style>
         """, unsafe_allow_html=True)
-        st.table(table_data)
-    else:
-        st.info("Не найдено элементов оглавления для отображения")
+    with st.expander("📋 Проверка соответствия содержания", expanded=False):
+        if table_data:
+            st.table(table_data)
+        else:
+            st.info("Не найдено элементов оглавления для отображения")
 
     
     for p in toc_lines:
