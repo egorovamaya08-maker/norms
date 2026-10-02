@@ -216,15 +216,21 @@ def original_smart_is_section_header(text, doc, is_in_intro=False):
         return True
     
     
-    if re.match(r'^\d+\.\s*[А-ЯЁ]', cleaned):
-        
+    if re.match(r'^(?:ГЛАВА|РАЗДЕЛ)\s+\d+', cleaned, re.IGNORECASE):
+        # Отсекаем предложения: длинный текст / глаголы / точка в конце
+        words = cleaned.split()
+        if len(words) > 8:          # слишком длинно для заголовка
+            return False
         if cleaned.rstrip().endswith('.'):
             return False
-        clean_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
-        if not clean_letters:
+        # типичные глаголы в прошедшем / настоящем — признак предложения
+        verb_hints = re.search(
+            r'\b(развел|показал|рассмотрел|описал|явил|являет|содержит|включает|представляет|определяет|формирует|обеспечивает|позволяет|является|были|было|будет)\b',
+            cleaned, re.IGNORECASE
+        )
+        if verb_hints:
             return False
-        upper_count = sum(1 for c in clean_letters if c.isupper())
-        return upper_count >= len(clean_letters) * 0.8
+        return True
     
     
     only_letters = re.sub(r'[\d\s\.,;:!?\-–—()«»""''«»]', '', cleaned)
@@ -583,7 +589,7 @@ def extract_figure_number(text):
     m = re.search(r'(?:Рисунок|Рис\.)\s*(\d+)', text, re.IGNORECASE)
     if m:
         try:
-            return int(m.group(1))
+            return m.group(1)
         except ValueError:
             return None
     return None
@@ -609,7 +615,7 @@ def extract_table_number(text):
     m = re.search(r'Таблица\s+(\d+)', text, re.IGNORECASE)
     if m:
         try:
-            return int(m.group(1))
+            return m.group(1)
         except ValueError:
             return None
     return None
@@ -854,9 +860,21 @@ def group_issues(issues_list):
 
     for issue in auto_issues:
         match = re.match(
-            r'^(?:«([^»]+)»|(Рисунок\s+[\d.]+)|(Таблица\s+[\d.]+)|'
-            r'(Подраздел\s+«([^»]+)»)|(Пояснение к формуле «([^»]+)»)|'
-            r'(Список начиная с «([^»]+)»)|(Нумерация страниц))\s*[–-]\s*(.+)$',
+            r'^(?:'
+            r'«([^»]+)»|'                           # 1: обычный заголовок в кавычках
+            r'(Рисунок\s+[\d.]+)|'                   # 2
+            r'(Таблица\s+[\d.]+)|'                   # 3
+            r'(Подраздел\s+«([^»]+)»)|'              # 4, 5
+            r'(Пояснение к формуле «([^»]+)»)|'      # 6, 7
+            r'(Список начиная с «([^»]+)»)|'         # 8, 9
+            r'(Нумерация страниц)|'                  # 10
+            r'(Содержание)|'                         # 11  
+            r'(Рисунки)|'                            # 12  
+            r'(Таблицы)|'                            # 13  
+            r'(Поля страниц)|'                       # 14  
+            r'(Список источников)|'                  # 15  
+            r'(Основной текст, начиная со строки «[^»]+»)'  
+            r')\s*[–-]\s*(.+)$',
             issue
         )
         if match:
@@ -869,14 +887,26 @@ def group_issues(issues_list):
                 key = match.group(3)
             elif match.group(5):
                 key = f"Подраздел «{match.group(5)[:50]}»"
-            elif match.group(6):
+            elif match.group(7):
                 key = f"Пояснение к формуле «{match.group(7)[:60]}»"
-            elif match.group(8):
+            elif match.group(9):
                 key = f"Список начиная с «{match.group(9)[:50]}»"
             elif match.group(10):
                 key = "Нумерация страниц"
+            elif match.group(11):
+                key = "Содержание"
+            elif match.group(12):
+                key = "Рисунки"
+            elif match.group(13):
+                key = "Таблицы"
+            elif match.group(14):
+                key = "Поля страниц"
+            elif match.group(15):
+                key = "Список источников"
+            elif match.group(16):
+                key = match.group(16)
             if key:
-                message = match.group(11)
+                message = match.group(17)  # ← последняя группа (.+)
                 grouped[key].append(message)
             else:
                 standalone.append(issue)
@@ -1020,18 +1050,24 @@ def group_issues(issues_list):
         result.append(issue)
     for key, messages in grouped.items():
         unique_msgs = list(dict.fromkeys(messages))
+        prefix_no_quotes = (
+            key.startswith("Подраздел «") or
+            key.startswith("Пояснение к формуле «") or
+            key.startswith("Список начиная с «") or
+            key.startswith("Рисунок ") or
+            key.startswith("Таблица ") or
+            key in ("Нумерация страниц", "Содержание", "Рисунки", "Таблицы",
+                    "Поля страниц", "Список источников") or
+            key.startswith("Основной текст")
+        )
         if len(unique_msgs) == 1:
-            if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
-                result.append(f"{key} – {unique_msgs[0]}")
-            elif key.startswith("Рисунок ") or key.startswith("Таблица ") or key == "Нумерация страниц":
+            if prefix_no_quotes:
                 result.append(f"{key} – {unique_msgs[0]}")
             else:
                 result.append(f"«{key}» – {unique_msgs[0]}")
         else:
             combined = "; ".join(unique_msgs)
-            if key.startswith("Подраздел «") or key.startswith("Пояснение к формуле «") or key.startswith("Список начиная с «"):
-                result.append(f"{key} – {combined}")
-            elif key.startswith("Рисунок ") or key.startswith("Таблица ") or key == "Нумерация страниц":
+            if prefix_no_quotes:
                 result.append(f"{key} – {combined}")
             else:
                 result.append(f"«{key}» – {combined}")
@@ -1970,10 +2006,10 @@ def check_table_caption_additions(paragraph):
     return errors
 
 def check_table_numbering_additions(document):
-    """Проверка последовательности нумерации таблиц"""
+    """Проверка последовательности нумерации таблиц (в т.ч. 1.1, 1.2, …)"""
     errors = []
     tables = document.tables
-    table_numbers = []
+    table_numbers = []  # список строк: "1", "1.1", "2" ...
     for table in tables:
         caption = get_table_caption_elem(table)
         if caption:
@@ -1981,12 +2017,38 @@ def check_table_numbering_additions(document):
             if number is not None:
                 table_numbers.append(number)
 
-    if table_numbers:
-        expected = list(range(1, len(table_numbers) + 1))
-        if sorted(table_numbers) != expected:
-            missing = sorted(set(expected) - set(table_numbers))
-            if missing:
-                errors.append(f"Таблицы – пропущена таблица {', '.join(map(str, missing))}")
+    if not table_numbers:
+        return errors
+
+    # Группируем по «родителю»: "" для целых, "1" для 1.x, "1.2" для 1.2.x
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for num in table_numbers:
+        parts = num.split('.')
+        if len(parts) == 1:
+            parent = ''          # сквозная нумерация 1, 2, 3
+            leaf = int(parts[0])
+        else:
+            parent = '.'.join(parts[:-1])
+            leaf = int(parts[-1])
+        groups[parent].append(leaf)
+
+    missing_msgs = []
+    for parent, leaves in groups.items():
+        leaves_sorted = sorted(set(leaves))
+        expected = list(range(1, leaves_sorted[-1] + 1))
+        missing = [x for x in expected if x not in leaves_sorted]
+        if missing:
+            if parent == '':
+                missing_str = ', '.join(str(m) for m in missing)
+            else:
+                missing_str = ', '.join(f"{parent}.{m}" for m in missing)
+            missing_msgs.append(missing_str)
+
+    if missing_msgs:
+        errors.append(
+            f"Таблицы – пропущена таблица {'; '.join(missing_msgs)}. Проверьте нумерацию таблиц"
+        )
     return errors
 
 def check_formula_explanation_additions(paragraph):
@@ -2248,6 +2310,13 @@ def check_word_document(file):
             is_level1 = True
         elif smart_is_section_header(norm_text, doc):
             is_level1 = True
+        if is_level1 and text.upper() not in ["ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]:
+            words = text.split()
+            if len(words) > 10 or re.search(
+                r'\b(развел|показал|рассмотрел|описал|являет|содержит|включает|представляет|является)\b',
+                text, re.IGNORECASE
+            ):
+                is_level1 = False
 
         
         is_subsection = improved_is_subsection_header(p, doc)
@@ -2386,6 +2455,7 @@ def check_word_document(file):
                 tbl_match = re.match(r'Таблица\s+(\d+(?:\.\d+)?)', norm_text)
                 if tbl_match:
                     tbl_num = tbl_match.group(1)
+                    table_numbers_found.append(tbl_num)
                     key = f"Таблица {tbl_num}"
 
                     if not re.match(r'Таблица\s+\d+\s+[-–—]{1,2}\s+', text):
@@ -2506,14 +2576,6 @@ def check_word_document(file):
         auto_issues.append(f"Список начиная с «{first_text[:50]}» и далее – замените круглый маркер (•) на тире, букву или цифру")
 
 
-
-    table_seq_issues = []
-    if table_numbers_found:
-        int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
-        if int_tbl_nums:
-            if int_tbl_nums[0] != 1 or any(expected not in int_tbl_nums for expected in range(1, int_tbl_nums[-1] + 1)):
-                table_seq_issues.append("Таблицы – неверная нумерация")
-
     
     table_title_re = re.compile(r'^таблица\s+\d+', re.IGNORECASE)
     TABLE_CONTINUATION_RE = re.compile(r'^(продолжение|окончание)\s+таблицы', re.IGNORECASE)
@@ -2572,12 +2634,6 @@ def check_word_document(file):
                             f"📋 После таблицы {table_num} отсутствует пустая строка перед текстом «{short_next}»."
             )
 
-    
-    if table_numbers_found:
-        int_tbl_nums = sorted(set(int(n) for n in table_numbers_found if n == int(n)))
-        if int_tbl_nums:
-            if int_tbl_nums[0] != 1 or any(expected not in int_tbl_nums for expected in range(1, int_tbl_nums[-1] + 1)):
-                auto_issues.append("Таблицы – неверная нумерация")
 
     
     if lit_start is not None:
