@@ -931,7 +931,32 @@ def group_issues(issues_list):
                     del grouped[tbl_key]
             # Добавляем общее сообщение в standalone
             standalone.append(f"Таблицы – {msg}")
-            
+
+    # ===== Группировка одинаковых замечаний по подразделам (выравнивание и др.) =====
+    subsection_msg_counts = defaultdict(list) 
+    for key, messages in list(grouped.items()):
+        if key.startswith("Подраздел «"):
+            for msg in messages:
+                subsection_msg_counts[msg].append(key)
+
+    # Сообщения, которые встречаются у 3+ подразделов — группируем
+    for msg, keys in list(subsection_msg_counts.items()):
+        if len(keys) >= 3:
+            # Удаляем это сообщение из каждого подраздела
+            for k in keys:
+                if k in grouped:
+                    grouped[k] = [m for m in grouped[k] if m != msg]
+                    if not grouped[k]:
+                        del grouped[k]
+            # Добавляем одно общее замечание
+            first_key = keys[0]  # например "Подраздел «1.2 Название»"
+            # Берём короткое имя первого подраздела
+            short_name = first_key.replace("Подраздел «", "").rstrip("»")[:40]
+            standalone.append(
+                f"Подраздел «{short_name}» и далее – {msg}"
+            )
+
+    
     caption_msg_pattern = re.compile(r'^Исправьте название на «Таблица [\d.]+ – Название»$')
     caption_msgs_keys = []
     for key in list(grouped.keys()):
@@ -2440,37 +2465,7 @@ def check_word_document(file):
                 auto_issues.append(f"{key} – уберите пустую строку после подраздела (пустая строка допускается только после разделов)")
     
           
-            # Проверка пустой строки перед подразделом
-            if idx > 0:
-                prev_p = doc.paragraphs[idx - 1]
-                prev_txt = prev_p.text.strip()
-                # Если предыдущий параграф не пустой и является заголовком раздела (уровня 1)
-                if prev_txt and smart_is_section_header(prev_txt, doc):
-                    # Добавляем замечание, так как перед подразделом нет пустой строки
-                    auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
-            
 
-
-
-            
-            if idx > 0:
-                prev_p = doc.paragraphs[idx - 1]
-                prev_txt = prev_p.text.strip()
-                if prev_txt != "":
-                    try:
-                        body_elems_local = list(doc.element.body)
-                        body_idx = body_elems_local.index(p._element)
-                    except:
-                        body_idx = -1
-                    if body_idx != -1 and is_on_new_page(doc, body_idx, start_body_pos=start_idx):
-                        pass
-                    elif smart_is_section_header(prev_txt, doc) or re.match(r'^\d+\.\d+', prev_txt):
-                        auto_issues.append(f"{key} – добавьте пустую строку перед подразделом")
-                    else:
-                        manual_issues.append(
-                            f"{key} – проверьте визуально: если он перенесен на новую страницу, то отступ перед ним не нужен. "
-                            f"Если он идет внутри страницы, добавьте пустую строку."
-                        )
 
         # Сброс флагов для следующей итерации
         if text:
