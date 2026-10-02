@@ -1957,21 +1957,31 @@ def check_figure_caption_additions(paragraph):
     return errors
 
 def check_figure_numbering_additions(document):
-    """Проверка последовательности нумерации рисунков"""
+    """Проверка пропусков в нумерации рисунков (дыры между 1 и max)."""
     errors = []
     figures = find_all_figures(document)
     figure_numbers = []
     for fig in figures:
         num = extract_figure_number(fig.text)
         if num is not None:
-            figure_numbers.append(num)
+            try:
+                figure_numbers.append(int(float(num)))  # и "2", и "2.0"
+            except (ValueError, TypeError):
+                pass
 
-    if figure_numbers:
-        expected = list(range(1, len(figure_numbers) + 1))
-        if sorted(figure_numbers) != expected:
-            missing = sorted(set(expected) - set(figure_numbers))
-            if missing:
-                errors.append(f"Рисунки – пропущен рисунок {', '.join(map(str, missing))}. Проверьте нумерацию рисунков")
+    if not figure_numbers:
+        return errors
+
+    nums = sorted(set(figure_numbers))
+    max_n = nums[-1]
+    expected = set(range(1, max_n + 1))
+    missing = sorted(expected - set(nums))
+
+    if missing:
+        errors.append(
+            f"Рисунки – пропущен рисунок {', '.join(map(str, missing))}. "
+            f"Проверьте нумерацию рисунков"
+        )
     return errors
 
 def check_table_caption_additions(paragraph):
@@ -2853,11 +2863,15 @@ def is_table_caption(paragraph) -> bool:
             re.match(r'^таблица\\s+\\d+', text) or re.match(r'^table\\s+\\d+', text, re.IGNORECASE))
 
 def is_figure_caption(paragraph) -> bool:
-    """Проверяет подпись рисунка."""
     text = paragraph.text.strip().lower()
-    return (text.startswith("рисунок") or text.startswith("figure") or text.startswith("рис.") or
-            re.match(r'^рисунок\\s+\\d+', text) or re.match(r'^figure\\s+\\d+', text, re.IGNORECASE) or
-            re.match(r'^рис\\.\\s+\\d+', text))
+    return (
+        text.startswith("рисунок") or
+        text.startswith("figure") or
+        text.startswith("рис.") or
+        bool(re.match(r'^рисунок\s+\d+', text)) or
+        bool(re.match(r'^figure\s+\d+', text, re.IGNORECASE)) or
+        bool(re.match(r'^рис\.\s*\d+', text))
+    )
 
 def check_empty_lines_around_object(paragraph, doc) -> Optional[str]:
     """Проверяет пустые строки вокруг таблиц/рисунков."""
